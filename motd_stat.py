@@ -1,5 +1,25 @@
 #!/usr/bin/env python
 
+# Written in 2012 by Joe Tsai <joetsai@digital-static.net>
+#
+# ===================================================================
+# The contents of this file are dedicated to the public domain. To
+# the extent that dedication to the public domain is not available,
+# everyone is granted a worldwide, perpetual, royalty-free,
+# non-exclusive license to exercise all rights associated with the
+# contents of this file for any purpose whatsoever.
+# No rights are reserved.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+# BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+# ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+# CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+# ===================================================================
+
 import re
 import os
 import sys
@@ -61,18 +81,23 @@ class NetworkStatistic(threading.Thread):
                     if not results:
                         continue
                     device,rx_bytes,tx_bytes = results.groups()
+                    rx_bytes,tx_bytes = int(rx_bytes),int(tx_bytes)
 
                     # Push results onto circular queue
                     self.lock.acquire()
                     try:
                         if self.interfaces.has_key(device):
-                            rx_buffer,tx_buffer = self.interfaces[device]
+                            values = self.interfaces[device]
+                            line_buffer,rx_buffer,tx_buffer = values
                         else:
+                            line_buffer = collections.deque(maxlen = self.size)
                             rx_buffer = collections.deque(maxlen = self.size)
                             tx_buffer = collections.deque(maxlen = self.size)
-                            self.interfaces[device] = rx_buffer,tx_buffer
-                        rx_buffer.appendleft(int(rx_bytes))
-                        tx_buffer.appendleft(int(tx_bytes))
+                            values = line_buffer,rx_buffer,tx_buffer
+                            self.interfaces[device] = values
+                        line_buffer.appendleft(line)
+                        rx_buffer.appendleft(rx_bytes)
+                        tx_buffer.appendleft(tx_bytes)
                     finally:
                         self.lock.release()
 
@@ -113,7 +138,7 @@ def network_handler():
                     data = conn.recv(1024)
                     if not data:
                         break
-                    conn.sendall(process_request(data))
+                    conn.sendall(process_request(data)+'\n')
                     break
                 except socket.timeout:
                     pass
@@ -135,23 +160,45 @@ def process_request(data):
     # Try and parse the arguments
     try:
         data = json.loads(data)
-        device = data.get('device','eth0') # The network device
-        length = data.get('length',10) # Time length in seconds to average over
-        weight = data.get('weight',False) # Average weight constant
-
-        # Check the time length
-        size = int(round(float(length)/sample_period))
-        assert size > 0
-
-        # Check the average weight constant
-        weight = float(weight)
-        assert 1 >= weight >= 0
+        assert len(data) <= 1
+        debug = data.pop('debug',None)
+        average = data.pop('average',{}) # Default action
+        assert len(data) == 0
     except:
         return json.dumps({'error':"unable to parse arguments"})
 
     try:
-        rx_avg,tx_avg = compute_average(device, size, weight)
-        return json.dumps({'rx_average':rx_avg,'tx_average':tx_avg})
+        # Command is debug
+        if isinstance(debug,basestring):
+            net_stat.lock.acquire()
+            try:
+                line_buffer,rx_buffer,tx_buffer = net_stat.interfaces[debug]
+                lines = [x for x in line_buffer]
+                rx_samples = [x for x in rx_buffer]
+                tx_samples = [x for x in tx_buffer]
+                data = {'lines': lines,
+                        'rx_samples': rx_samples,
+                        'tx_samples': tx_samples}
+            finally:
+                net_stat.lock.release()
+            return json.dumps(data)
+
+        # Command is average
+        if isinstance(average,dict):
+            device = average.get('device','eth0') # The network device
+            length = average.get('length',10) # Time length in seconds
+            weight = average.get('weight',False) # Average weight constant
+
+            # Check the time length
+            size = int(round(float(length)/sample_period))
+            assert size > 0
+
+            # Check the average weight constant
+            weight = float(weight)
+            assert 1 >= weight >= 0
+
+            rx_avg,tx_avg = compute_average(device, size, weight)
+            return json.dumps({'rx_average':rx_avg,'tx_average':tx_avg})
     except Exception, ex:
         return json.dumps({'error':str(ex)})
 
@@ -163,7 +210,7 @@ def compute_average(device, size, weight = 0.0):
     net_stat.lock.acquire()
     try:
         if net_stat.interfaces.has_key(device):
-            rx_buffer,tx_buffer = net_stat.interfaces[device]
+            line_buffer,rx_buffer,tx_buffer = net_stat.interfaces[device]
             request_size = size+1 # Account for extra sample to compute delta
             size = min(len(rx_buffer),len(tx_buffer),request_size)
 
