@@ -44,26 +44,25 @@ UPPER_HALF_BLOCK = unichr(0x2580)
 LOWER_HALF_BLOCK = unichr(0x2584)
 
 # Logo definition
-LOGO = (" %s ____    ____ %s\n"
-        " %s|  _ \  / ___\%s%s ____  ____ _____ %s\n"
-        " %s| | \ \/_/_ _ %s%s|  _ \| ___|_   _\%s\n"
-        " %s| |_/ /____/ /%s%s| | | | ___| | |  %s\n"
-        " %s|____/ \____/ %s%s|_| |_|____| |_|  %s\n")
-LOGO_COLORS = []
-for index in range(5):
-    LOGO_COLORS += [GREEN1,RESET]
-    if index > 0:
-        LOGO_COLORS += [BLUE1,RESET]
+LOGO = (" %s ____    ____ %s                  %s\n"
+        " %s|  _ \  / ___\%s ____  ____ _____ %s\n"
+        " %s| | \ \/_/_ _ %s|  _ \| ___|_   _\%s\n"
+        " %s| |_/ /____/ /%s| | | | ___| | |  %s\n"
+        " %s|____/ \____/ %s|_| |_|____| |_|  %s\n")
+LOGO_COLORS = (GREEN1,BLUE1,RESET)*5
 
 # Regex patterns
 REGEX_CTIME = (r'[a-zA-Z]{3} [a-zA-Z]{3} [ 0-9]{2} '   # Day name, month, day
                 '[0-9]{2}:[0-9]{2}:[0-9]{2} [0-9]{4}') # HH:MM:SS YYYY
 
 # Warning settings and thresholds
-CACHE_FREE = True # Is disk cache considered free memory or not?
 CPU_WARN_LEVEL = 80.0
 RAM_WARN_LEVEL = 80.0
 DISK_WARN_LEVEL = 80.0
+
+# Miscellaneous settings and configurations
+CACHE_FREE = True # Is disk cache considered free memory or not?
+FULL_HOSTNAME = False # Use the full FQDN hostname
 
 opts,args = None,None
 utf_support = None
@@ -129,27 +128,26 @@ def display_welcome():
     global opts
     os_issue = ''.join(exec_cmd('/bin/cat /etc/issue')).strip()
     os_name = re.sub(r'\\[a-zA-Z]','',os_issue).strip()
-    full_name = ''.join(exec_cmd('hostname')).strip()
+    cmd = 'hostname -f' if FULL_HOSTNAME else 'hostname'
+    host_name = ''.join(exec_cmd(cmd)).strip()
     if opts.color:
-        full_name = TEXT_PRIMARY+full_name+RESET
+        host_name = TEXT_PRIMARY+host_name+RESET
         os_name = TEXT_PRIMARY+os_name+RESET
-    welcome = " Welcome to %s running %s" % (full_name,os_name)
+    welcome = " Welcome to %s running %s" % (host_name,os_name)
     print welcome
 
 def display_logo():
     global opts
     if opts.color:
-        print LOGO % tuple(LOGO_COLORS)
+        print LOGO % LOGO_COLORS
     else:
         print LOGO % tuple(['' for x in LOGO_COLORS])
 
 def display_info():
     global opts, info_list
-    max_length = 0
+    max_length = max([len(key) for key,value in info_list])
     for key,value in info_list:
-        max_length = max(len(key),max_length)
-    for key,value in info_list:
-        key = key.ljust(max_length+3,' ')
+        key = (key+':').ljust(max_length+4,' ')
         if opts.color:
             key = TEXT_SECONDARY+key+RESET
         print " %s%s" % (key,value)
@@ -183,14 +181,14 @@ opts_parser.add_option('-b', '--border',
                               "Locale must support unicode. ")
 (opts, args) = opts_parser.parse_args()
 
+# Color is enabled if warning is enabled
+if opts.warn:
+    opts.color = True
+
 # Output is not a tty
 if not hasattr(sys.stderr, "isatty") or not sys.stderr.isatty():
     opts.color = False
     opts.border = False
-
-# Color is enabled if warning is enabled
-if opts.warn:
-    opts.color = True
 
 ################################################################################
 ################################# Script start #################################
@@ -210,6 +208,7 @@ try:
     user,port,host,start,end = re.search(regex,login_host[1]).groups()
     assert bool(user == getpass.getuser())
     if host in ['',':0',':0.0']: host = 'localhost'
+    start = re.sub('\s+',' ',start)
 
     if opts.color:
         if opts.warn:
@@ -240,10 +239,10 @@ try:
         if opts.warn and (reboot_time > start_time):
             color = WARNING
         start = color+start+RESET
-    info_list.append(('Last login:', '%s from %s' % (start,host)))
+    info_list.append(('Last login', '%s from %s' % (start,host)))
 except:
     login = exec_cmd('lastlog -u $USER')
-    info_list.append(('Last login:', ' '.join(login[-1].split())))
+    info_list.append(('Last login', ' '.join(login[-1].split())))
 
 # Get uptime
 uptime = ''.join(exec_cmd('/bin/cat /proc/uptime')).strip()
@@ -269,9 +268,9 @@ try:
         message_list.append(text)
 
     if message_list:
-        info_list.append(('Uptime:', ', '.join(message_list)))
+        info_list.append(('Uptime', ', '.join(message_list)))
 except:
-    info_list.append(('Uptime:', uptime))
+    info_list.append(('Uptime', uptime))
 
 # Get CPU information
 uname = ''.join(exec_cmd('/bin/uname -m')).strip()
@@ -306,7 +305,7 @@ try:
             model = TEXT_PRIMARY+model+RESET
         message = '%s %s' % (bits,model) if bits else bits
         message = '%s, %s' % (message,cores) if cores else message
-        info_list.append(('CPU information:', message))
+        info_list.append(('CPU information', message))
 except:
     pass
 
@@ -325,7 +324,7 @@ try:
         loads_text.append(percent_text)
     values = tuple(loads_text)
     message = "%s (1 minute) - %s (5 minutes) - %s (15 minutes)" % values
-    info_list.append(('CPU load:', message))
+    info_list.append(('CPU load', message))
 except:
     pass
 
@@ -358,7 +357,7 @@ try:
         percent_text = color+percent_text+RESET
     values = percent_text,byte_unit(total),byte_unit(used),byte_unit(free)
     message = "%s - %s total, %s used, %s free" % values
-    info_list.append(('Memory usage:', message))
+    info_list.append(('Memory usage', message))
 except:
     pass
 
@@ -376,7 +375,7 @@ try:
         percent_text = color+percent_text+RESET
     values = percent_text,byte_unit(total),byte_unit(used),byte_unit(free)
     message = "%s - %s total, %s used, %s free" % values
-    info_list.append(('Disk usage:', message))
+    info_list.append(('Disk usage', message))
 except:
     pass
 
@@ -390,7 +389,7 @@ try:
             total_procs = NUM_PRIMARY+str(total_procs)+RESET
         values = user_procs,total_procs
         message = "User running %s processes out of %s total" % values
-        info_list.append(('Processes:', message))
+        info_list.append(('Processes', message))
 except:
     pass
 
