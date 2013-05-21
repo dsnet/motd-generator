@@ -6,6 +6,7 @@ import sys
 import math
 import getpass
 import optparse
+import datetime
 
 ################################################################################
 ############################### Global variables ###############################
@@ -43,16 +44,20 @@ UPPER_HALF_BLOCK = unichr(0x2580)
 LOWER_HALF_BLOCK = unichr(0x2584)
 
 # Logo definition
-LOGO = " %s ____    ____ %s\n" \
-       " %s|  _ \  / ___\%s%s ____  ___ _____ %s\n" \
-       " %s| | \ \/_/_ _ %s%s|  _ \| __|_   _\%s\n" \
-       " %s| |_/ /____/ /%s%s| | | | __| | |  %s\n" \
-       " %s|____/ \____/ %s%s|_| |_|___| |_|  %s\n"
+LOGO = (" %s ____    ____ %s\n"
+        " %s|  _ \  / ___\%s%s ____  ____ _____ %s\n"
+        " %s| | \ \/_/_ _ %s%s|  _ \| ___|_   _\%s\n"
+        " %s| |_/ /____/ /%s%s| | | | ___| | |  %s\n"
+        " %s|____/ \____/ %s%s|_| |_|____| |_|  %s\n")
 LOGO_COLORS = []
 for index in range(5):
     LOGO_COLORS += [GREEN1,RESET]
     if index > 0:
         LOGO_COLORS += [BLUE1,RESET]
+
+# Regex patterns
+REGEX_CTIME = (r'[a-zA-Z]{3} [a-zA-Z]{3} [ 0-9]{2} '   # Day name, month, day
+                '[0-9]{2}:[0-9]{2}:[0-9]{2} [0-9]{4}') # HH:MM:SS YYYY
 
 # Warning highlight thresholds (in percents)
 CPU_WARN_LEVEL = 80.0
@@ -160,8 +165,15 @@ opts_parser.add_option('-h', '--help',
 opts_parser.add_option('-c', '--color',
                        default = False,
                        action = "store_true",
-                       help = "Print the MOTD with color. "
-                              "This will highlight any warnings. ")
+                       help = "Print the MOTD with color.")
+opts_parser.add_option('-w', '--warn',
+                       default = False,
+                       action = "store_true",
+                       help = "Highlight any potential issues. "
+                              "This will automatically enable colored output. "
+                              "Warns if last login host is different. "
+                              "Warns if first login since a reboot. "
+                              "Warns if CPU, RAM, or disk usage is excessive.")
 opts_parser.add_option('-b', '--border',
                        default = False,
                        action = "store_true",
@@ -175,6 +187,10 @@ if not hasattr(sys.stderr, "isatty") or not sys.stderr.isatty():
     opts.color = False
     opts.border = False
 
+# Color is enabled if warning is enabled
+if opts.warn:
+    opts.color = True
+
 ################################################################################
 ################################# Script start #################################
 ################################################################################
@@ -184,17 +200,42 @@ if not hasattr(sys.stderr, "isatty") or not sys.stderr.isatty():
 
 # Get last login
 login = exec_cmd('last -n 2 -w -F $USER')
+
 try:
-    login = login[1].strip()
-    user,port,host,date = login.split(None,3)
+    login_now,login_pre = login[:2]
+    regex = (r'([^\s]+)\s+' # Username
+              '([^\s]+)\s+' # Virtual terminal
+              '([^\s]*)\s+' # Hostname (blank if local terminal)
+              '(%s)[-\s]+(%s)?.*' % (REGEX_CTIME,REGEX_CTIME)) # Date start-end
+    user,port,host_now,start_now,end_now = re.search(regex,login_now).groups()
     assert bool(user == getpass.getuser())
-    if host == ':0':
-        host = 'localhost'
-    start,end = re.split(r'\s{3}| - ',date,1)
+    user,port,host_pre,start_pre,end_pre = re.search(regex,login_pre).groups()
+    assert bool(user == getpass.getuser())
+
+    if host_now in ['',':0',':0.0']: host_now = 'localhost'
+    if host_pre in ['',':0',':0.0']: host_pre = 'localhost'
+
+    uptime = ''.join(exec_cmd('/bin/cat /proc/uptime')).strip()
+
     if opts.color:
-        start = TEXT_PRIMARY+start+RESET
-        host = TEXT_PRIMARY+host+RESET
-    info_list.append(('Last login:', '%s from %s' % (start,host)))
+        # Hostname color (warn if login from different host)
+        color = TEXT_PRIMARY
+        if opts.warn and (host_now != host_pre):
+            color = WARNING
+        host_pre = color+host_pre+RESET
+
+        # Last login date color (warn if first login since reboot)
+        color = TEXT_PRIMARY
+        if opts.warn:
+            datetime,timedelta = datetime.datetime,datetime.timedelta
+            uptime = ''.join(exec_cmd('/bin/cat /proc/uptime')).strip()
+            total_time, idle_time = [int(float(x)) for x in uptime.split()]
+            start = datetime.strptime(start_pre, "%a %b %d %H:%M:%S %Y")
+            reboot = datetime.now() - timedelta(seconds = total_time)
+            if reboot > start:
+                color = WARNING
+        start_pre = color+start_pre+RESET
+    info_list.append(('Last login:', '%s from %s' % (start_pre,host_pre)))
 except:
     login = exec_cmd('lastlog -u $USER')
     info_list.append(('Last login:', ' '.join(login[-1].split())))
@@ -272,7 +313,9 @@ try:
     for load in loads:
         percent_text = '%.2f%%' % load
         if opts.color:
-            color = WARNING if load > CPU_WARN_LEVEL else NUM_PRIMARY
+            color = NUM_PRIMARY
+            if opts.warn and (load > CPU_WARN_LEVEL):
+                color = WARNING
             percent_text = color+percent_text+RESET
         loads_text.append(percent_text)
     values = tuple(loads_text)
@@ -295,7 +338,9 @@ try:
         percent = (float(used)/float(total))*100.0
         percent_text = '%.2f%%' % percent
         if opts.color:
-            color = WARNING if percent > RAM_WARN_LEVEL else NUM_PRIMARY
+            color = NUM_PRIMARY
+            if opts.warn and (percent > RAM_WARN_LEVEL):
+                color = WARNING
             percent_text = color+percent_text+RESET
         values = percent_text,byte_unit(total),byte_unit(used),byte_unit(free)
         message = "%s - %s total, %s used, %s free" % values
@@ -311,7 +356,9 @@ try:
     percent = (float(used)/float(total))*100.0
     percent_text = '%.2f%%' % percent
     if opts.color:
-        color = WARNING if percent > DISK_WARN_LEVEL else NUM_PRIMARY
+        color = NUM_PRIMARY
+        if opts.warn and (percent > DISK_WARN_LEVEL):
+            color = WARNING
         percent_text = color+percent_text+RESET
     values = percent_text,byte_unit(total),byte_unit(used),byte_unit(free)
     message = "%s - %s total, %s used, %s free" % values
