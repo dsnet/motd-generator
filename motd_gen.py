@@ -29,6 +29,12 @@ CYAN1   = '\x1b[1;36m'
 CYAN0   = '\x1b[0;36m'
 RESET   = '\x1b[0m'
 
+# Color aliases
+NUM_PRIMARY = BLUE0
+NUM_SECONDARY = BLUE1
+TEXT_PRIMARY = DGRAY0
+TEXT_SECONDARY = DGRAY1
+
 # Unicode block characters
 UPPER_HALF_BLOCK = unichr(0x2580)
 LOWER_HALF_BLOCK = unichr(0x2584)
@@ -46,6 +52,7 @@ for index in range(5):
         LOGO_COLORS += [BLUE1,RESET]
 
 opts,args = None,None
+utf_support = None
 rows,columns = None,None
 info_list = []
 
@@ -57,7 +64,7 @@ def exec_cmd(cmd):
     lines = os.popen(cmd + ' 2> /dev/null', 'r').readlines()
     return [line.rstrip() for line in lines]
 
-def byte_unit(bytes, color = BLUE1):
+def byte_unit(bytes, color = NUM_SECONDARY):
     global opts
     units = ['B','KB','MB','GB','TB','PB','EB','ZB','YB']
     value = bytes
@@ -72,7 +79,12 @@ def byte_unit(bytes, color = BLUE1):
     raise ValueError("Unable to convert bytes to human readable format")
 
 def display_border(type):
-    global opts, rows, columns
+    global opts, utf_support, rows, columns
+
+    # Check for unicode support
+    if utf_support is None:
+        locale = ''.join(exec_cmd('locale charmap'))
+        utf_support = bool('UTF' in locale)
 
     # Check for terminal size
     if rows is None and columns is None:
@@ -82,7 +94,7 @@ def display_border(type):
         except ValueError:
             pass
 
-    if opts.border and columns:
+    if opts.border and utf_support and columns:
         print type * columns
 
 def display_upper_border():
@@ -97,8 +109,8 @@ def display_welcome():
     os_name = re.sub(r'\\[a-zA-Z]','',os_issue).strip()
     full_name = ''.join(exec_cmd('domainname -f')).strip()
     if opts.color:
-        full_name = DGRAY1+full_name+RESET
-        os_name = DGRAY1+os_name+RESET
+        full_name = TEXT_SECONDARY+full_name+RESET
+        os_name = TEXT_SECONDARY+os_name+RESET
     welcome = " Welcome to %s running %s" % (full_name,os_name)
     print welcome
 
@@ -117,7 +129,7 @@ def display_info():
     for key,value in info_list:
         key = key.ljust(max_length+3,' ')
         if opts.color:
-            key = DGRAY0+key+RESET
+            key = TEXT_PRIMARY+key+RESET
         print " %s%s" % (key,value)
 
 ################################################################################
@@ -137,7 +149,8 @@ opts_parser.add_option('-b', '--border',
                        default = False,
                        action = "store_true",
                        help = "Print MOTD with a upper and lower border. "
-                              "Requires being to determine terminal width. ")
+                              "Requires being to determine terminal width. "
+                              "Locale must support unicode. ")
 (opts, args) = opts_parser.parse_args()
 
 ################################################################################
@@ -152,8 +165,8 @@ login = exec_cmd('lastlog -u $USER')[-1].strip()
 try:
     user,port,host,last = login.split(None,3)
     if opts.color:
-        last = DGRAY1+last+RESET
-        host = DGRAY1+host+RESET
+        last = TEXT_SECONDARY+last+RESET
+        host = TEXT_SECONDARY+host+RESET
     info_list.append(('Last login:', '%s from %s' % (last,host)))
 except:
     info_list.append(('Last login:', ' '.join(login.split())))
@@ -168,10 +181,10 @@ try:
     seconds = total_time%60
 
     if opts.color:
-        days = BLUE1+str(days)+RESET
-        hours = BLUE1+str(hours)+RESET
-        minutes = BLUE1+str(minutes)+RESET
-        seconds = BLUE1+str(seconds)+RESET
+        days = NUM_SECONDARY+str(days)+RESET
+        hours = NUM_SECONDARY+str(hours)+RESET
+        minutes = NUM_SECONDARY+str(minutes)+RESET
+        seconds = NUM_SECONDARY+str(seconds)+RESET
 
     message_list = []
     message_list.append('%s days' % days)
@@ -185,8 +198,17 @@ except:
     info_list.append(('Uptime:', uptime))
 
 # Get CPU information
+uname = ''.join(exec_cmd('/bin/uname -m')).strip()
 cpu_info = exec_cmd('/bin/cat /proc/cpuinfo')
 try:
+    # Get bit width
+    if '_64' in uname:
+        bits = '64-bit'
+    elif uname:
+        bits = '32-bit'
+    else:
+        bits = ""
+
     # Get model
     model = ''
     for line in cpu_info:
@@ -203,10 +225,11 @@ try:
             cores += 1
     cores = "%sx cores" % cores
 
-    if model and cores:
+    if model or cores:
         if opts.color:
-            model = DGRAY1+model+RESET
-        message = '%s, %s' % (model,cores)
+            model = TEXT_SECONDARY+model+RESET
+        message = '%s %s' % (bits,model) if bits else bits
+        message = '%s, %s' % (message,cores) if cores else message
         info_list.append(('CPU information:', message))
 except:
     pass
@@ -219,7 +242,7 @@ try:
     for load in loads:
         percent_text = '%.2f%%' % load
         if opts.color:
-            percent_text = BLUE0+percent_text+RESET
+            percent_text = NUM_PRIMARY+percent_text+RESET
         loads_text.append(percent_text)
     values = tuple(loads_text)
     message = "%s (1 minute) - %s (5 minutes) - %s (15 minutes)" % values
@@ -241,7 +264,7 @@ try:
         percent = (float(used)/float(total))*100.0
         percent_text = '%.2f%%' % percent
         if opts.color:
-            percent_text = BLUE0+percent_text+RESET
+            percent_text = NUM_PRIMARY+percent_text+RESET
         values = percent_text,byte_unit(total),byte_unit(used),byte_unit(free)
         message = "%s - %s total, %s used, %s free" % values
         info_list.append(('Memory usage:', message))
@@ -256,7 +279,7 @@ try:
     percent = (float(used)/float(total))*100.0
     percent_text = '%.2f%%' % percent
     if opts.color:
-        percent_text = BLUE0+percent_text+RESET
+        percent_text = NUM_PRIMARY+percent_text+RESET
     values = percent_text,byte_unit(total),byte_unit(used),byte_unit(free)
     message = "%s - %s total, %s used, %s free" % values
     info_list.append(('Disk usage:', message))
@@ -269,8 +292,8 @@ total_procs = len(exec_cmd('ps -A h'))
 try:
     if (total_procs or user_procs) and (total_procs >= user_procs):
         if opts.color:
-            user_procs = BLUE1+str(user_procs)+RESET
-            total_procs = BLUE1+str(total_procs)+RESET
+            user_procs = NUM_SECONDARY+str(user_procs)+RESET
+            total_procs = NUM_SECONDARY+str(total_procs)+RESET
         values = user_procs,total_procs
         message = "User running %s processes out of %s total" % values
         info_list.append(('Processes:', message))
