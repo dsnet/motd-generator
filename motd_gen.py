@@ -4,12 +4,22 @@ import re
 import os
 import sys
 
+################################################################################
+############################### Global variables ###############################
+################################################################################
+
 # Logo definition
 LOGO = "  ____    ____                   \n" \
        " |  _ \  / ___\ ____  ___ _____  \n" \
        " | | \ \/_/_ _ |  _ \| __|_   _\ \n" \
        " | |_/ /____/ /| | | | __| | |   \n" \
        " |____/ \____/ |_| |_|___| |_|   \n"
+
+info_list = []
+
+################################################################################
+############################### Helper functions ###############################
+################################################################################
 
 def exec_cmd(cmd):
     lines = os.popen(cmd + ' 2> /dev/null', 'r').readlines()
@@ -22,8 +32,33 @@ def byte_unit(bytes):
         if round(value) < 1000:
             return "%d %s" % (round(value),units[order])
         value = value/1000.0
+    raise ValueError("Unable to convert bytes to human readable format")
 
-info_list = []
+def display_welcome():
+    os_issue = ''.join(exec_cmd('/bin/cat /etc/issue')).strip()
+    os_name = re.sub(r'\\[a-zA-Z]','',os_issue).strip()
+    full_name = ''.join(exec_cmd('domainname -f')).strip()
+    welcome = " Welcome to %s running %s" % (full_name,os_name)
+    print welcome
+
+def display_logo():
+    print LOGO
+
+def display_info():
+    global info_list
+    max_length = 0
+    for key,value in info_list:
+        max_length = max(len(key),max_length)
+    for key,value in info_list:
+        key = key.ljust(max_length+3,' ')
+        print " %s%s" % (key,value)
+
+################################################################################
+################################# Script start #################################
+################################################################################
+
+####################
+# Generate info list
 
 # Get last login
 login = exec_cmd('lastlog -u $USER')[-1].strip()
@@ -74,7 +109,7 @@ try:
 
     if model and cores:
         message = '%s, %s' % (model,cores)
-        info_list.append(('CPU info:', message))
+        info_list.append(('CPU information:', message))
 except:
     pass
 
@@ -130,22 +165,15 @@ total_procs = len(exec_cmd('ps -A h'))
 try:
     if (total_procs or user_procs) and (total_procs >= user_procs):
         values = user_procs,total_procs
-        message = "Running %s processes out of %s total" % values
+        message = "User running %s processes out of %s total" % values
         info_list.append(('Processes:', message))
 except:
     pass
 
-# Print the welcome message
-os_issue = ''.join(exec_cmd('/bin/cat /etc/issue')).strip()
-os_name = re.sub(r'\\[a-zA-Z]','',os_issue).strip()
-full_name = ''.join(exec_cmd('domainname -f')).strip()
-print " Welcome to %s running %s" % (full_name,os_name)
-
-# Print the logo
-print LOGO
-
-# Print all of the info
-for key,value in info_list:
-    print " %s\t%s" % (key,value)
+####################
+# Display the MOTD
+display_welcome()
+display_logo()
+display_info()
 
 # EOF
