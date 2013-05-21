@@ -34,6 +34,7 @@ NUM_PRIMARY = BLUE0
 NUM_SECONDARY = BLUE1
 TEXT_PRIMARY = DGRAY0
 TEXT_SECONDARY = DGRAY1
+WARNING = YELLOW0
 
 # Unicode block characters
 UPPER_HALF_BLOCK = unichr(0x2580)
@@ -50,6 +51,11 @@ for index in range(5):
     LOGO_COLORS += [GREEN1,RESET]
     if index > 0:
         LOGO_COLORS += [BLUE1,RESET]
+
+# Warning highlight thresholds (in percents)
+CPU_WARN_LEVEL = 80.0
+RAM_WARN_LEVEL = 80.0
+DISK_WARN_LEVEL = 80.0
 
 opts,args = None,None
 utf_support = None
@@ -144,7 +150,8 @@ opts_parser.add_option('-h', '--help',
 opts_parser.add_option('-c', '--color',
                        default = False,
                        action = "store_true",
-                       help = "Print the MOTD with color. ")
+                       help = "Print the MOTD with color. "
+                              "This will highlight any warnings. ")
 opts_parser.add_option('-b', '--border',
                        default = False,
                        action = "store_true",
@@ -180,17 +187,19 @@ try:
     minutes = total_time/60%60
     seconds = total_time%60
 
-    if opts.color:
-        days = NUM_SECONDARY+str(days)+RESET
-        hours = NUM_SECONDARY+str(hours)+RESET
-        minutes = NUM_SECONDARY+str(minutes)+RESET
-        seconds = NUM_SECONDARY+str(seconds)+RESET
-
-    message_list = []
-    message_list.append('%s days' % days)
-    message_list.append('%s hours' % hours)
-    message_list.append('%s minutes' % minutes)
-    message_list.append('%s seconds' % seconds)
+    # Don't display leading empty units
+    skip,message_list = True,[]
+    for unit in ['days','hours','minutes','seconds']:
+        value = locals()[unit]
+        if value:
+            skip = False
+        elif skip:
+            continue
+        text = str(value)
+        if opts.color:
+            text = NUM_SECONDARY+text+RESET
+        text += ' '+unit
+        message_list.append(text)
 
     if message_list:
         info_list.append(('Uptime:', ', '.join(message_list)))
@@ -242,7 +251,8 @@ try:
     for load in loads:
         percent_text = '%.2f%%' % load
         if opts.color:
-            percent_text = NUM_PRIMARY+percent_text+RESET
+            color = WARNING if load > CPU_WARN_LEVEL else NUM_PRIMARY
+            percent_text = color+percent_text+RESET
         loads_text.append(percent_text)
     values = tuple(loads_text)
     message = "%s (1 minute) - %s (5 minutes) - %s (15 minutes)" % values
@@ -264,7 +274,8 @@ try:
         percent = (float(used)/float(total))*100.0
         percent_text = '%.2f%%' % percent
         if opts.color:
-            percent_text = NUM_PRIMARY+percent_text+RESET
+            color = WARNING if percent > RAM_WARN_LEVEL else NUM_PRIMARY
+            percent_text = color+percent_text+RESET
         values = percent_text,byte_unit(total),byte_unit(used),byte_unit(free)
         message = "%s - %s total, %s used, %s free" % values
         info_list.append(('Memory usage:', message))
@@ -279,7 +290,8 @@ try:
     percent = (float(used)/float(total))*100.0
     percent_text = '%.2f%%' % percent
     if opts.color:
-        percent_text = NUM_PRIMARY+percent_text+RESET
+        color = WARNING if percent > DISK_WARN_LEVEL else NUM_PRIMARY
+        percent_text = color+percent_text+RESET
     values = percent_text,byte_unit(total),byte_unit(used),byte_unit(free)
     message = "%s - %s total, %s used, %s free" % values
     info_list.append(('Disk usage:', message))
