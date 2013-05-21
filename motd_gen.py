@@ -59,7 +59,8 @@ for index in range(5):
 REGEX_CTIME = (r'[a-zA-Z]{3} [a-zA-Z]{3} [ 0-9]{2} '   # Day name, month, day
                 '[0-9]{2}:[0-9]{2}:[0-9]{2} [0-9]{4}') # HH:MM:SS YYYY
 
-# Warning highlight thresholds (in percents)
+# Warning settings and thresholds
+CACHE_FREE = True # Is disk cache considered free memory or not?
 CPU_WARN_LEVEL = 80.0
 RAM_WARN_LEVEL = 80.0
 DISK_WARN_LEVEL = 80.0
@@ -199,43 +200,47 @@ if opts.warn:
 # Generate info list
 
 # Get last login
-login = exec_cmd('last -n 2 -w -F $USER')
-
+login_host = exec_cmd('last -n 2 -w -F $USER')
 try:
-    login_now,login_pre = login[:2]
     regex = (r'([^\s]+)\s+' # Username
               '([^\s]+)\s+' # Virtual terminal
               '([^\s]*)\s+' # Hostname (blank if local terminal)
               '(%s)[-\s]+(%s)?.*' % (REGEX_CTIME,REGEX_CTIME)) # Date start-end
-    user,port,host_now,start_now,end_now = re.search(regex,login_now).groups()
-    assert bool(user == getpass.getuser())
-    user,port,host_pre,start_pre,end_pre = re.search(regex,login_pre).groups()
-    assert bool(user == getpass.getuser())
 
-    if host_now in ['',':0',':0.0']: host_now = 'localhost'
-    if host_pre in ['',':0',':0.0']: host_pre = 'localhost'
-
-    uptime = ''.join(exec_cmd('/bin/cat /proc/uptime')).strip()
+    user,port,host,start,end = re.search(regex,login_host[1]).groups()
+    assert bool(user == getpass.getuser())
+    if host in ['',':0',':0.0']: host = 'localhost'
 
     if opts.color:
-        # Hostname color (warn if login from different host)
-        color = TEXT_PRIMARY
-        if opts.warn and (host_now != host_pre):
-            color = WARNING
-        host_pre = color+host_pre+RESET
-
-        # Last login date color (warn if first login since reboot)
-        color = TEXT_PRIMARY
         if opts.warn:
+            # Get the previous login sources in address form
+            login_addr = exec_cmd('last -n 2 -w -F -i $USER')
+            login_now,login_pre = login_addr[:2]
+            results_now = re.search(regex,login_now).groups()
+            results_pre = re.search(regex,login_pre).groups()
+            assert bool(results_now[0] == results_pre[0] == getpass.getuser())
+            addr_now,start_now,end_now = results_now[2:]
+            addr_pre,start_pre,end_pre = results_pre[2:]
+
+            # Get the last reboot time and login time
             datetime,timedelta = datetime.datetime,datetime.timedelta
             uptime = ''.join(exec_cmd('/bin/cat /proc/uptime')).strip()
             total_time, idle_time = [int(float(x)) for x in uptime.split()]
-            start = datetime.strptime(start_pre, "%a %b %d %H:%M:%S %Y")
-            reboot = datetime.now() - timedelta(seconds = total_time)
-            if reboot > start:
-                color = WARNING
-        start_pre = color+start_pre+RESET
-    info_list.append(('Last login:', '%s from %s' % (start_pre,host_pre)))
+            reboot_time = datetime.now() - timedelta(seconds = total_time)
+            start_time = datetime.strptime(start_pre, "%a %b %d %H:%M:%S %Y")
+
+        # Hostname color (warn if login from different host)
+        color = TEXT_PRIMARY
+        if opts.warn and (addr_now != addr_pre):
+            color = WARNING
+        host = color+host+RESET
+
+        # Last login date color (warn if first login since reboot)
+        color = TEXT_PRIMARY
+        if opts.warn and (reboot_time > start_time):
+            color = WARNING
+        start = color+start+RESET
+    info_list.append(('Last login:', '%s from %s' % (start,host)))
 except:
     login = exec_cmd('lastlog -u $USER')
     info_list.append(('Last login:', ' '.join(login[-1].split())))
@@ -327,24 +332,33 @@ except:
 # Get memory usage
 mem_usage = exec_cmd('free -b')
 try:
-    mem_line = ''
+    # Parse out the memory and cache lines
+    mem_line,cache_line = '',''
     for line in mem_usage:
-        if re.search(r'^Mem:',line):
-            mem_line = line.strip()
-            break
-    if mem_line:
-        label,total,used,free,others = mem_line.split(None,4)
-        total,used,free = int(total),int(used),int(free)
-        percent = (float(used)/float(total))*100.0
-        percent_text = '%.2f%%' % percent
-        if opts.color:
-            color = NUM_PRIMARY
-            if opts.warn and (percent > RAM_WARN_LEVEL):
-                color = WARNING
-            percent_text = color+percent_text+RESET
-        values = percent_text,byte_unit(total),byte_unit(used),byte_unit(free)
-        message = "%s - %s total, %s used, %s free" % values
-        info_list.append(('Memory usage:', message))
+        results = re.search(r'^Mem:\s+(.*)',line)
+        if results:
+            mem_line = results.groups()[0]
+        results = re.search(r'.*buffers/cache:\s+(.*)',line)
+        if results:
+            cache_line = results.groups()[0]
+
+    # Determine what disk cache is considered
+    total,used,free,others = mem_line.split(None,3)
+    if CACHE_FREE:
+        used,free = cache_line.split(None,1)
+    total,used,free = int(total),int(used),int(free)
+
+    # Format output text
+    percent = (float(used)/float(total))*100.0
+    percent_text = '%.2f%%' % percent
+    if opts.color:
+        color = NUM_PRIMARY
+        if opts.warn and (percent > RAM_WARN_LEVEL):
+            color = WARNING
+        percent_text = color+percent_text+RESET
+    values = percent_text,byte_unit(total),byte_unit(used),byte_unit(free)
+    message = "%s - %s total, %s used, %s free" % values
+    info_list.append(('Memory usage:', message))
 except:
     pass
 
