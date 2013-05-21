@@ -8,6 +8,10 @@ import sys
 ############################### Global variables ###############################
 ################################################################################
 
+# Unicode block characters
+UPPER_HALF_BLOCK = unichr(0x2580)
+LOWER_HALF_BLOCK = unichr(0x2584)
+
 # Logo definition
 LOGO = "  ____    ____                   \n" \
        " |  _ \  / ___\ ____  ___ _____  \n" \
@@ -15,6 +19,7 @@ LOGO = "  ____    ____                   \n" \
        " | |_/ /____/ /| | | | __| | |   \n" \
        " |____/ \____/ |_| |_|___| |_|   \n"
 
+rows,columns = None,None
 info_list = []
 
 ################################################################################
@@ -33,6 +38,26 @@ def byte_unit(bytes):
             return "%d %s" % (round(value),units[order])
         value = value/1000.0
     raise ValueError("Unable to convert bytes to human readable format")
+
+def display_border(type):
+    global rows, columns
+
+    # Check for terminal size
+    if rows is None and columns is None:
+        try:
+            rows,columns = ''.join(exec_cmd('stty size')).split()
+            rows,columns = int(rows),int(columns)
+        except ValueError:
+            pass
+
+    if columns:
+        print type * columns
+
+def display_upper_border():
+    display_border(UPPER_HALF_BLOCK)
+
+def display_lower_border():
+    display_border(LOWER_HALF_BLOCK)
 
 def display_welcome():
     os_issue = ''.join(exec_cmd('/bin/cat /etc/issue')).strip()
@@ -172,8 +197,10 @@ except:
 
 ####################
 # Display the MOTD
+display_upper_border()
 display_welcome()
 display_logo()
 display_info()
+display_lower_border()
 
 # EOF
