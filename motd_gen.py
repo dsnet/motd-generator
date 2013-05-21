@@ -3,6 +3,8 @@
 import re
 import os
 import sys
+import math
+import getpass
 import optparse
 
 ################################################################################
@@ -30,11 +32,11 @@ CYAN0   = '\x1b[0;36m'
 RESET   = '\x1b[0m'
 
 # Color aliases
-NUM_PRIMARY = BLUE0
-NUM_SECONDARY = BLUE1
-TEXT_PRIMARY = DGRAY0
+NUM_PRIMARY = BLUE1
+NUM_SECONDARY = BLUE0
+TEXT_PRIMARY = LGRAY1
 TEXT_SECONDARY = DGRAY1
-WARNING = YELLOW0
+WARNING = YELLOW1
 
 # Unicode block characters
 UPPER_HALF_BLOCK = unichr(0x2580)
@@ -70,13 +72,18 @@ def exec_cmd(cmd):
     lines = os.popen(cmd + ' 2> /dev/null', 'r').readlines()
     return [line.rstrip() for line in lines]
 
-def byte_unit(bytes, color = NUM_SECONDARY):
+def byte_unit(bytes, width = 4, color = NUM_SECONDARY):
     global opts
     units = ['B','KB','MB','GB','TB','PB','EB','ZB','YB']
     value = bytes
     for order in range(len(units)):
         if round(value) < 1000:
-            text = "%d %s" % (round(value),units[order])
+            text = '%0.'+str(width-2)+'f'
+            text = text % value
+            text = text[:width]
+            if text[-1] == '.':
+                text = text[:-1]
+            text += ' '+units[order]
             if color and opts.color:
                 return color+text+RESET
             else:
@@ -84,7 +91,7 @@ def byte_unit(bytes, color = NUM_SECONDARY):
         value = value/1000.0
     raise ValueError("Unable to convert bytes to human readable format")
 
-def display_border(type):
+def display_border(type, color = TEXT_SECONDARY):
     global opts, utf_support, rows, columns
 
     # Check for unicode support
@@ -101,7 +108,10 @@ def display_border(type):
             pass
 
     if opts.border and utf_support and columns:
-        print type * columns
+        border = type * columns
+        if opts.color:
+            border = color+border+RESET
+        print border
 
 def display_upper_border():
     display_border(UPPER_HALF_BLOCK)
@@ -113,10 +123,10 @@ def display_welcome():
     global opts
     os_issue = ''.join(exec_cmd('/bin/cat /etc/issue')).strip()
     os_name = re.sub(r'\\[a-zA-Z]','',os_issue).strip()
-    full_name = ''.join(exec_cmd('domainname -f')).strip()
+    full_name = ''.join(exec_cmd('hostname')).strip()
     if opts.color:
-        full_name = TEXT_SECONDARY+full_name+RESET
-        os_name = TEXT_SECONDARY+os_name+RESET
+        full_name = TEXT_PRIMARY+full_name+RESET
+        os_name = TEXT_PRIMARY+os_name+RESET
     welcome = " Welcome to %s running %s" % (full_name,os_name)
     print welcome
 
@@ -135,7 +145,7 @@ def display_info():
     for key,value in info_list:
         key = key.ljust(max_length+3,' ')
         if opts.color:
-            key = TEXT_PRIMARY+key+RESET
+            key = TEXT_SECONDARY+key+RESET
         print " %s%s" % (key,value)
 
 ################################################################################
@@ -160,6 +170,11 @@ opts_parser.add_option('-b', '--border',
                               "Locale must support unicode. ")
 (opts, args) = opts_parser.parse_args()
 
+# Output is not a tty
+if not hasattr(sys.stderr, "isatty") or not sys.stderr.isatty():
+    opts.color = False
+    opts.border = False
+
 ################################################################################
 ################################# Script start #################################
 ################################################################################
@@ -168,15 +183,21 @@ opts_parser.add_option('-b', '--border',
 # Generate info list
 
 # Get last login
-login = exec_cmd('lastlog -u $USER')[-1].strip()
+login = exec_cmd('last -n 2 -w -F $USER')
 try:
-    user,port,host,last = login.split(None,3)
+    login = login[1].strip()
+    user,port,host,date = login.split(None,3)
+    assert bool(user == getpass.getuser())
+    if host == ':0':
+        host = 'localhost'
+    start,end = re.split(r'\s{3}| - ',date,1)
     if opts.color:
-        last = TEXT_SECONDARY+last+RESET
-        host = TEXT_SECONDARY+host+RESET
-    info_list.append(('Last login:', '%s from %s' % (last,host)))
+        start = TEXT_PRIMARY+start+RESET
+        host = TEXT_PRIMARY+host+RESET
+    info_list.append(('Last login:', '%s from %s' % (start,host)))
 except:
-    info_list.append(('Last login:', ' '.join(login.split())))
+    login = exec_cmd('lastlog -u $USER')
+    info_list.append(('Last login:', ' '.join(login[-1].split())))
 
 # Get uptime
 uptime = ''.join(exec_cmd('/bin/cat /proc/uptime')).strip()
@@ -197,7 +218,7 @@ try:
             continue
         text = str(value)
         if opts.color:
-            text = NUM_SECONDARY+text+RESET
+            text = NUM_PRIMARY+text+RESET
         text += ' '+unit
         message_list.append(text)
 
@@ -236,7 +257,7 @@ try:
 
     if model or cores:
         if opts.color:
-            model = TEXT_SECONDARY+model+RESET
+            model = TEXT_PRIMARY+model+RESET
         message = '%s %s' % (bits,model) if bits else bits
         message = '%s, %s' % (message,cores) if cores else message
         info_list.append(('CPU information:', message))
@@ -304,8 +325,8 @@ total_procs = len(exec_cmd('ps -A h'))
 try:
     if (total_procs or user_procs) and (total_procs >= user_procs):
         if opts.color:
-            user_procs = NUM_SECONDARY+str(user_procs)+RESET
-            total_procs = NUM_SECONDARY+str(total_procs)+RESET
+            user_procs = NUM_PRIMARY+str(user_procs)+RESET
+            total_procs = NUM_PRIMARY+str(total_procs)+RESET
         values = user_procs,total_procs
         message = "User running %s processes out of %s total" % values
         info_list.append(('Processes:', message))
