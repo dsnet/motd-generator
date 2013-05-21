@@ -4,6 +4,7 @@ import re
 import os
 import sys
 import math
+import json
 import getpass
 import optparse
 import datetime
@@ -56,14 +57,21 @@ REGEX_CTIME = (r'[a-zA-Z]{3} [a-zA-Z]{3} [ 0-9]{2} '   # Day name, month, day
                 '[0-9]{2}:[0-9]{2}:[0-9]{2} [0-9]{4}') # HH:MM:SS YYYY
 
 # Warning settings and thresholds
-CPU_WARN_LEVEL = 80.0
-RAM_WARN_LEVEL = 80.0
-DISK_WARN_LEVEL = 80.0
+CPU_WARN_LEVEL = 80.0 # CPU load in percents
+RAM_WARN_LEVEL = 80.0 # RAM usage in percents
+DISK_WARN_LEVEL = 80.0 # Disk usage in percents
+NET_WARN_LEVEL = 1048576.0 # Network usage in B/s
 
 # Miscellaneous settings and configurations
 CACHE_FREE = True # Is disk cache considered free memory or not?
 FULL_HOSTNAME = False # Use the full FQDN hostname
+NETSTAT_PORT = 4004 # Port for the motd_netstat daemon
+NETSTAT_DEVICE = 'eth0' # The network device to monitor
+NETSTAT_LENGTH = 600 # Time length in seconds to average the bandwidth over
+NETSTAT_WEIGHT = 1.0 # Perform moving average weight
+PREFIX_MODE = 1024 # IEC binary prefix
 
+prefix_mode = 'iec'
 opts,args = None,None
 utf_support = None
 rows,columns = None,None
@@ -74,29 +82,51 @@ info_list = []
 ################################################################################
 
 def exec_cmd(cmd):
+    """Execute a command and retrieve standard output"""
     lines = os.popen(cmd + ' 2> /dev/null', 'r').readlines()
     return [line.rstrip() for line in lines]
 
-def byte_unit(bytes, width = 4, color = NUM_SECONDARY):
+def shell_escape(data):
+    """Escape a string for use on shells"""
+    return "'" + data.replace("'", "'\\''") + "'"
+
+def unitize(value, units, prefix_mode, width = 4, color = NUM_SECONDARY):
+    """Apply prefix and units"""
     global opts
-    units = ['B','KB','MB','GB','TB','PB','EB','ZB','YB']
-    value = bytes
-    for order in range(len(units)):
-        if round(value) < 1000:
+
+    if   (prefix_mode == 'iec'): mult = 1024
+    elif (prefix_mode == 'si'):  mult = 1000
+    else: raise ValueError("Invalid prefix mode")
+
+    prefixes = ['','K','M','G','T','P','E','Z','Y']
+    for order in range(len(prefixes)):
+        if round(value) < mult:
             text = '%0.'+str(width-2)+'f'
             text = text % value
             text = text[:width]
             if text[-1] == '.':
                 text = text[:-1]
-            text += ' '+units[order]
+            prefix = prefixes[order]
+            if prefix and (prefix_mode == 'iec'):
+                prefix += 'i'
+            text += ' '+prefix+units
             if color and opts.color:
                 return color+text+RESET
             else:
                 return text
-        value = value/1000.0
-    raise ValueError("Unable to convert bytes to human readable format")
+        value = value/float(mult)
+    raise ValueError("Unable to convert value to human readable format")
+
+def si_unitize(value, units = '', prefix_mode = 'si', **kwargs):
+    """Apply prefix using the SI standard"""
+    return unitize(value, units, prefix_mode, **kwargs)
+
+def iec_unitize(value, units = '', prefix_mode = 'iec', **kwargs):
+    """Apply prefix using the IEC standard"""
+    return unitize(value, units, prefix_mode, **kwargs)
 
 def display_border(type, color = TEXT_SECONDARY):
+    """Display a horizontal border of some character"""
     global opts, utf_support, rows, columns
 
     # Check for unicode support
@@ -119,14 +149,17 @@ def display_border(type, color = TEXT_SECONDARY):
         print border
 
 def display_upper_border():
+    """Display the upper border"""
     display_border(UPPER_HALF_BLOCK)
 
 def display_lower_border():
+    """Display the lower border"""
     display_border(LOWER_HALF_BLOCK)
 
 def display_welcome():
+    """Display the welcome message"""
     global opts
-    os_issue = ''.join(exec_cmd('/bin/cat /etc/issue')).strip()
+    os_issue = ''.join(exec_cmd('cat /etc/issue')).strip()
     os_name = re.sub(r'\\[a-zA-Z]','',os_issue).strip()
     cmd = 'hostname -f' if FULL_HOSTNAME else 'hostname'
     host_name = ''.join(exec_cmd(cmd)).strip()
@@ -137,6 +170,7 @@ def display_welcome():
     print welcome
 
 def display_logo():
+    """Display the logo"""
     global opts
     if opts.color:
         print LOGO % LOGO_COLORS
@@ -144,6 +178,7 @@ def display_logo():
         print LOGO % tuple(['' for x in LOGO_COLORS])
 
 def display_info():
+    """Display system statistical information"""
     global opts, info_list
     max_length = max([len(key) for key,value in info_list])
     for key,value in info_list:
@@ -179,6 +214,13 @@ opts_parser.add_option('-b', '--border',
                        help = "Print MOTD with a upper and lower border. "
                               "Requires being to determine terminal width. "
                               "Locale must support unicode. ")
+opts_parser.add_option('-p', '--prefix_mode',
+                       default = None,
+                       help = "Set the prefix mode to use either the SI or "
+                              "IEC stantard. Set to 'si' for base 1000 units "
+                              "'iec' for base 1024 units. Defaults to IEC for "
+                              "memory and network values and SI for diskspace "
+                              "values. ")
 (opts, args) = opts_parser.parse_args()
 
 # Color is enabled if warning is enabled
@@ -189,6 +231,11 @@ if opts.warn:
 if not hasattr(sys.stderr, "isatty") or not sys.stderr.isatty():
     opts.color = False
     opts.border = False
+
+# Check prefix mode
+if opts.prefix_mode and opts.prefix_mode not in ['si','iec']:
+    print "Invalid prefix mode: %s" % opts.prefix_mode
+    sys.exit(1)
 
 ################################################################################
 ################################# Script start #################################
@@ -223,7 +270,7 @@ try:
 
             # Get the last reboot time and login time
             datetime,timedelta = datetime.datetime,datetime.timedelta
-            uptime = ''.join(exec_cmd('/bin/cat /proc/uptime')).strip()
+            uptime = ''.join(exec_cmd('cat /proc/uptime')).strip()
             total_time, idle_time = [int(float(x)) for x in uptime.split()]
             reboot_time = datetime.now() - timedelta(seconds = total_time)
             start_time = datetime.strptime(start_pre, "%a %b %d %H:%M:%S %Y")
@@ -245,7 +292,7 @@ except:
     info_list.append(('Last login', ' '.join(login[-1].split())))
 
 # Get uptime
-uptime = ''.join(exec_cmd('/bin/cat /proc/uptime')).strip()
+uptime = ''.join(exec_cmd('cat /proc/uptime')).strip()
 try:
     total_time,idle_time = [int(float(x)) for x in uptime.split()]
     days = total_time/60/60/24
@@ -254,7 +301,7 @@ try:
     seconds = total_time%60
 
     # Don't display leading empty units
-    skip,message_list = True,[]
+    skip,message_list = (True,[])
     for unit in ['days','hours','minutes','seconds']:
         value = locals()[unit]
         if value:
@@ -274,7 +321,7 @@ except:
 
 # Get CPU information
 uname = ''.join(exec_cmd('/bin/uname -m')).strip()
-cpu_info = exec_cmd('/bin/cat /proc/cpuinfo')
+cpu_info = exec_cmd('cat /proc/cpuinfo')
 try:
     # Get bit width
     if '_64' in uname:
@@ -310,7 +357,7 @@ except:
     pass
 
 # Get CPU load
-cpu_load = ''.join(exec_cmd('/bin/cat /proc/loadavg')).strip()
+cpu_load = ''.join(exec_cmd('cat /proc/loadavg')).strip()
 try:
     loads = [float(x) for x in cpu_load.split(None,3)[:3]]
     loads_text = []
@@ -329,10 +376,11 @@ except:
     pass
 
 # Get memory usage
+units = si_unitize if (opts.prefix_mode == 'si') else iec_unitize
 mem_usage = exec_cmd('free -b')
 try:
     # Parse out the memory and cache lines
-    mem_line,cache_line = '',''
+    mem_line,cache_line = ('','')
     for line in mem_usage:
         results = re.search(r'^Mem:\s+(.*)',line)
         if results:
@@ -355,13 +403,14 @@ try:
         if opts.warn and (percent > RAM_WARN_LEVEL):
             color = WARNING
         percent_text = color+percent_text+RESET
-    values = percent_text,byte_unit(total),byte_unit(used),byte_unit(free)
+    values = percent_text,units(total,'B'),units(used,'B'),units(free,'B')
     message = "%s - %s total, %s used, %s free" % values
     info_list.append(('Memory usage', message))
 except:
     pass
 
 # Get disk usage
+units = iec_unitize if (opts.prefix_mode == 'iec') else si_unitize
 disk_usage = exec_cmd('df -B 1 /')[-1].strip()
 try:
     label,blocks,used,free,others = disk_usage.split(None,4)
@@ -373,9 +422,30 @@ try:
         if opts.warn and (percent > DISK_WARN_LEVEL):
             color = WARNING
         percent_text = color+percent_text+RESET
-    values = percent_text,byte_unit(total),byte_unit(used),byte_unit(free)
+    values = percent_text,units(total,'B'),units(used,'B'),units(free,'B')
     message = "%s - %s total, %s used, %s free" % values
     info_list.append(('Disk usage', message))
+except:
+    pass
+
+# Get network usage
+units = si_unitize if (opts.prefix_mode == 'si') else iec_unitize
+args = json.dumps({'device': NETSTAT_DEVICE,
+                   'length': NETSTAT_LENGTH,
+                   'weight': NETSTAT_WEIGHT})
+command = 'echo %s | netcat localhost %s' % (shell_escape(args),NETSTAT_PORT)
+net_usage = ''.join(exec_cmd(command)).strip()
+try:
+    data = json.loads(net_usage)
+    rx_avg,tx_avg = data['rx_average'],data['tx_average']
+    total = rx_avg + tx_avg
+    color = NUM_PRIMARY
+    if opts.warn and (total > NET_WARN_LEVEL):
+        color = WARNING
+    total_text = units(total, 'B/s', color = color)
+    values = total_text,units(rx_avg,'B/s'),units(tx_avg,'B/s')
+    message = "%s - %s down, %s up" % values
+    info_list.append(('Network traffic', message))
 except:
     pass
 
