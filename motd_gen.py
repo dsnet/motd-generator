@@ -3,22 +3,49 @@
 import re
 import os
 import sys
+import optparse
 
 ################################################################################
 ############################### Global variables ###############################
 ################################################################################
+
+# Linux terminal colors
+BOLD    = '\x1b[1m'
+DGRAY1  = '\x1b[1;30m'
+DGRAY0  = '\x1b[0;30m'
+LGRAY1  = '\x1b[1;37m'
+LGRAY0  = '\x1b[0;37m'
+RED1    = '\x1b[1;31m'
+RED0    = '\x1b[0;31m'
+GREEN1  = '\x1b[1;32m'
+GREEN0  = '\x1b[0;32m'
+BLUE1   = '\x1b[1;34m'
+BLUE0   = '\x1b[0;34m'
+YELLOW1 = '\x1b[1;33m'
+YELLOW0 = '\x1b[0;33m'
+PURPLE1 = '\x1b[1;35m'
+PURPLE0 = '\x1b[0;35m'
+CYAN1   = '\x1b[1;36m'
+CYAN0   = '\x1b[0;36m'
+RESET   = '\x1b[0m'
 
 # Unicode block characters
 UPPER_HALF_BLOCK = unichr(0x2580)
 LOWER_HALF_BLOCK = unichr(0x2584)
 
 # Logo definition
-LOGO = "  ____    ____                   \n" \
-       " |  _ \  / ___\ ____  ___ _____  \n" \
-       " | | \ \/_/_ _ |  _ \| __|_   _\ \n" \
-       " | |_/ /____/ /| | | | __| | |   \n" \
-       " |____/ \____/ |_| |_|___| |_|   \n"
+LOGO = " %s ____    ____ %s\n" \
+       " %s|  _ \  / ___\%s%s ____  ___ _____ %s\n" \
+       " %s| | \ \/_/_ _ %s%s|  _ \| __|_   _\%s\n" \
+       " %s| |_/ /____/ /%s%s| | | | __| | |  %s\n" \
+       " %s|____/ \____/ %s%s|_| |_|___| |_|  %s\n"
+LOGO_COLORS = []
+for index in range(5):
+    LOGO_COLORS += [GREEN1,RESET]
+    if index > 0:
+        LOGO_COLORS += [BLUE1,RESET]
 
+opts,args = None,None
 rows,columns = None,None
 info_list = []
 
@@ -30,17 +57,22 @@ def exec_cmd(cmd):
     lines = os.popen(cmd + ' 2> /dev/null', 'r').readlines()
     return [line.rstrip() for line in lines]
 
-def byte_unit(bytes):
+def byte_unit(bytes, color = BLUE1):
+    global opts
     units = ['B','KB','MB','GB','TB','PB','EB','ZB','YB']
     value = bytes
     for order in range(len(units)):
         if round(value) < 1000:
-            return "%d %s" % (round(value),units[order])
+            text = "%d %s" % (round(value),units[order])
+            if color and opts.color:
+                return color+text+RESET
+            else:
+                return text
         value = value/1000.0
     raise ValueError("Unable to convert bytes to human readable format")
 
 def display_border(type):
-    global rows, columns
+    global opts, rows, columns
 
     # Check for terminal size
     if rows is None and columns is None:
@@ -50,7 +82,7 @@ def display_border(type):
         except ValueError:
             pass
 
-    if columns:
+    if opts.border and columns:
         print type * columns
 
 def display_upper_border():
@@ -60,23 +92,53 @@ def display_lower_border():
     display_border(LOWER_HALF_BLOCK)
 
 def display_welcome():
+    global opts
     os_issue = ''.join(exec_cmd('/bin/cat /etc/issue')).strip()
     os_name = re.sub(r'\\[a-zA-Z]','',os_issue).strip()
     full_name = ''.join(exec_cmd('domainname -f')).strip()
+    if opts.color:
+        full_name = DGRAY1+full_name+RESET
+        os_name = DGRAY1+os_name+RESET
     welcome = " Welcome to %s running %s" % (full_name,os_name)
     print welcome
 
 def display_logo():
-    print LOGO
+    global opts
+    if opts.color:
+        print LOGO % tuple(LOGO_COLORS)
+    else:
+        print LOGO % tuple(['' for x in LOGO_COLORS])
 
 def display_info():
-    global info_list
+    global opts, info_list
     max_length = 0
     for key,value in info_list:
         max_length = max(len(key),max_length)
     for key,value in info_list:
         key = key.ljust(max_length+3,' ')
+        if opts.color:
+            key = DGRAY0+key+RESET
         print " %s%s" % (key,value)
+
+################################################################################
+################################ Options parser ################################
+################################################################################
+
+# Create a config parser
+opts_parser = optparse.OptionParser(add_help_option = False)
+opts_parser.add_option('-h', '--help',
+                       action = 'help',
+                       help = "Display this help and exit.")
+opts_parser.add_option('-c', '--color',
+                       default = False,
+                       action = "store_true",
+                       help = "Print the MOTD with color. ")
+opts_parser.add_option('-b', '--border',
+                       default = False,
+                       action = "store_true",
+                       help = "Print MOTD with a upper and lower border. "
+                              "Requires being to determine terminal width. ")
+(opts, args) = opts_parser.parse_args()
 
 ################################################################################
 ################################# Script start #################################
@@ -89,6 +151,9 @@ def display_info():
 login = exec_cmd('lastlog -u $USER')[-1].strip()
 try:
     user,port,host,last = login.split(None,3)
+    if opts.color:
+        last = DGRAY1+last+RESET
+        host = DGRAY1+host+RESET
     info_list.append(('Last login:', '%s from %s' % (last,host)))
 except:
     info_list.append(('Last login:', ' '.join(login.split())))
@@ -101,6 +166,12 @@ try:
     hours = total_time/60/60%24
     minutes = total_time/60%60
     seconds = total_time%60
+
+    if opts.color:
+        days = BLUE1+str(days)+RESET
+        hours = BLUE1+str(hours)+RESET
+        minutes = BLUE1+str(minutes)+RESET
+        seconds = BLUE1+str(seconds)+RESET
 
     message_list = []
     message_list.append('%s days' % days)
@@ -133,6 +204,8 @@ try:
     cores = "%sx cores" % cores
 
     if model and cores:
+        if opts.color:
+            model = DGRAY1+model+RESET
         message = '%s, %s' % (model,cores)
         info_list.append(('CPU information:', message))
 except:
@@ -145,6 +218,8 @@ try:
     loads_text = []
     for load in loads:
         percent_text = '%.2f%%' % load
+        if opts.color:
+            percent_text = BLUE0+percent_text+RESET
         loads_text.append(percent_text)
     values = tuple(loads_text)
     message = "%s (1 minute) - %s (5 minutes) - %s (15 minutes)" % values
@@ -165,6 +240,8 @@ try:
         total,used,free = int(total),int(used),int(free)
         percent = (float(used)/float(total))*100.0
         percent_text = '%.2f%%' % percent
+        if opts.color:
+            percent_text = BLUE0+percent_text+RESET
         values = percent_text,byte_unit(total),byte_unit(used),byte_unit(free)
         message = "%s - %s total, %s used, %s free" % values
         info_list.append(('Memory usage:', message))
@@ -178,6 +255,8 @@ try:
     total,used,free = int(used)+int(free),int(used),int(free)
     percent = (float(used)/float(total))*100.0
     percent_text = '%.2f%%' % percent
+    if opts.color:
+        percent_text = BLUE0+percent_text+RESET
     values = percent_text,byte_unit(total),byte_unit(used),byte_unit(free)
     message = "%s - %s total, %s used, %s free" % values
     info_list.append(('Disk usage:', message))
@@ -189,6 +268,9 @@ user_procs = len(exec_cmd('ps U $USER h'))
 total_procs = len(exec_cmd('ps -A h'))
 try:
     if (total_procs or user_procs) and (total_procs >= user_procs):
+        if opts.color:
+            user_procs = BLUE1+str(user_procs)+RESET
+            total_procs = BLUE1+str(total_procs)+RESET
         values = user_procs,total_procs
         message = "User running %s processes out of %s total" % values
         info_list.append(('Processes:', message))
