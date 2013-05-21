@@ -1,9 +1,28 @@
 #!/usr/bin/env python
 
+# Written in 2012 by Joe Tsai <joetsai@digital-static.net>
+#
+# ===================================================================
+# The contents of this file are dedicated to the public domain. To
+# the extent that dedication to the public domain is not available,
+# everyone is granted a worldwide, perpetual, royalty-free,
+# non-exclusive license to exercise all rights associated with the
+# contents of this file for any purpose whatsoever.
+# No rights are reserved.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+# BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+# ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+# CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+# ===================================================================
+
 import re
 import os
 import sys
-import math
 import json
 import getpass
 import optparse
@@ -68,10 +87,8 @@ FULL_HOSTNAME = False # Use the full FQDN hostname
 NETSTAT_PORT = 4004 # Port for the motd_netstat daemon
 NETSTAT_DEVICE = 'eth0' # The network device to monitor
 NETSTAT_LENGTH = 600 # Time length in seconds to average the bandwidth over
-NETSTAT_WEIGHT = 1.0 # Perform moving average weight
-PREFIX_MODE = 1024 # IEC binary prefix
+NETSTAT_WEIGHT = 1.0 # Perform linear moving average weight
 
-prefix_mode = 'iec'
 opts,args = None,None
 utf_support = None
 rows,columns = None,None
@@ -83,17 +100,41 @@ info_list = []
 
 def exec_cmd(cmd):
     """Execute a command and retrieve standard output"""
-    lines = os.popen(cmd + ' 2> /dev/null', 'r').readlines()
-    return [line.rstrip() for line in lines]
+    with os.popen(cmd + ' 2> /dev/null', 'r') as cmd_call:
+        return cmd_call.readlines()
+
+def read_file(path):
+    with open(path, 'r') as proc_file:
+        return proc_file.readlines()
 
 def shell_escape(data):
     """Escape a string for use on shells"""
     return "'" + data.replace("'", "'\\''") + "'"
 
+def colorize(text, color):
+    """Colorize the text only if color is enabled"""
+    global opts
+    return color+unicode(text)+RESET if opts.color else text
+
+def regex_find(line_list, regex_list, result_list, clear_results = True):
+    """Accept list of regexes and append captures into results list"""
+    if clear_results:
+        while result_list:
+            result_list.pop()
+        for index in range(len(regex_list)):
+            result_list.append(list())
+
+    # Check every line
+    for line in line_list:
+        # Check every regex on each line
+        for index in range(len(regex_list)):
+            results = re.search(regex_list[index],line.rstrip())
+            if results:
+                result_list[index].append(results.groups())
+    return bool([x for x in result_list if x])
+
 def unitize(value, units, prefix_mode, width = 4, color = NUM_SECONDARY):
     """Apply prefix and units"""
-    global opts
-
     if   (prefix_mode == 'iec'): mult = 1024
     elif (prefix_mode == 'si'):  mult = 1000
     else: raise ValueError("Invalid prefix mode")
@@ -110,10 +151,7 @@ def unitize(value, units, prefix_mode, width = 4, color = NUM_SECONDARY):
             if prefix and (prefix_mode == 'iec'):
                 prefix += 'i'
             text += ' '+prefix+units
-            if color and opts.color:
-                return color+text+RESET
-            else:
-                return text
+            return colorize(text,color)
         value = value/float(mult)
     raise ValueError("Unable to convert value to human readable format")
 
@@ -144,9 +182,7 @@ def display_border(type, color = TEXT_SECONDARY):
 
     if opts.border and utf_support and columns:
         border = type * columns
-        if opts.color:
-            border = color+border+RESET
-        print border
+        print colorize(border,color)
 
 def display_upper_border():
     """Display the upper border"""
@@ -158,41 +194,54 @@ def display_lower_border():
 
 def display_welcome():
     """Display the welcome message"""
-    global opts
-    os_issue = ''.join(exec_cmd('cat /etc/issue')).strip()
+    os_issue = ''.join(read_file('/etc/issue')).strip()
     os_name = re.sub(r'\\[a-zA-Z]','',os_issue).strip()
     cmd = 'hostname -f' if FULL_HOSTNAME else 'hostname'
     host_name = ''.join(exec_cmd(cmd)).strip()
-    if opts.color:
-        host_name = TEXT_PRIMARY+host_name+RESET
-        os_name = TEXT_PRIMARY+os_name+RESET
-    welcome = " Welcome to %s running %s" % (host_name,os_name)
-    print welcome
+    values = (colorize(host_name, TEXT_PRIMARY),colorize(os_name, TEXT_PRIMARY))
+    print " Welcome to %s running %s" % values
 
 def display_logo():
     """Display the logo"""
     global opts
-    if opts.color:
-        print LOGO % LOGO_COLORS
-    else:
-        print LOGO % tuple(['' for x in LOGO_COLORS])
+    print LOGO % (LOGO_COLORS if opts.color else tuple(['']*len(LOGO_COLORS)))
 
 def display_info():
     """Display system statistical information"""
-    global opts, info_list
+    global info_list
     max_length = max([len(key) for key,value in info_list])
     for key,value in info_list:
         key = (key+':').ljust(max_length+4,' ')
-        if opts.color:
-            key = TEXT_SECONDARY+key+RESET
-        print " %s%s" % (key,value)
+        print " %s%s" % (colorize(key,TEXT_SECONDARY),value)
 
 ################################################################################
 ################################ Options parser ################################
 ################################################################################
 
+epilog = \
+"""
+This is a custom message of the day (MOTD) designed to be as practical and
+informative as possible. The truth is, no one actually reads the MOTD. As such,
+the MOTD should contain useful, yet minimal, information about the host system
+such that a quick glance at it when logging in may actually be worth a person's
+precious time. This way, any potential issues are noticed and not naively
+ignored. This MOTD generator scripts has the ability to output text in color.
+Using this feature, potential issues can be highlighted for easy identification.
+
+Warnings that can be highlighted:
+ * The login time if this is the first login since a reboot
+ * The last login hostname if it differs from the current login hostname
+ * CPU load if it exceeds a threshold
+ * RAM usage if it exceeds a threshold
+ * Disk usage if it exceeds a threshold
+ * Network load if it exceeds a threshold
+
+Author: Joe Tsai <joetsai@digital-static.net>
+"""
+
 # Create a config parser
 opts_parser = optparse.OptionParser(add_help_option = False)
+opts_parser.format_epilog = lambda x: '\n'+epilog
 opts_parser.add_option('-h', '--help',
                        action = 'help',
                        help = "Display this help and exit.")
@@ -203,24 +252,21 @@ opts_parser.add_option('-c', '--color',
 opts_parser.add_option('-w', '--warn',
                        default = False,
                        action = "store_true",
-                       help = "Highlight any potential issues. "
-                              "This will automatically enable colored output. "
-                              "Warns if last login host is different. "
-                              "Warns if first login since a reboot. "
-                              "Warns if CPU, RAM, or disk usage is excessive.")
+                       help = "Highlight any potential issues. If this option "
+                              "is selected, it will enable colored output. ")
 opts_parser.add_option('-b', '--border',
                        default = False,
                        action = "store_true",
-                       help = "Print MOTD with a upper and lower border. "
-                              "Requires being to determine terminal width. "
-                              "Locale must support unicode. ")
+                       help = "Print MOTD with an upper and lower border. "
+                              "This requires being able to determine the "
+                              "terminal width and also being able to detect "
+                              "that the locale supports unicode. ")
 opts_parser.add_option('-p', '--prefix_mode',
                        default = None,
                        help = "Set the prefix mode to use either the SI or "
-                              "IEC stantard. Set to 'si' for base 1000 units "
+                              "IEC stantard. Use 'si' for base 1000 units "
                               "'iec' for base 1024 units. Defaults to IEC for "
-                              "memory and network values and SI for diskspace "
-                              "values. ")
+                              "all values. ")
 (opts, args) = opts_parser.parse_args()
 
 # Color is enabled if warning is enabled
@@ -236,6 +282,7 @@ if not hasattr(sys.stderr, "isatty") or not sys.stderr.isatty():
 if opts.prefix_mode and opts.prefix_mode not in ['si','iec']:
     print "Invalid prefix mode: %s" % opts.prefix_mode
     sys.exit(1)
+units = si_unitize if (opts.prefix_mode == 'si') else iec_unitize
 
 ################################################################################
 ################################# Script start #################################
@@ -243,57 +290,55 @@ if opts.prefix_mode and opts.prefix_mode not in ['si','iec']:
 
 ####################
 # Generate info list
+result_list = []
 
 # Get last login
-login_host = exec_cmd('last -n 2 -w -F $USER')
 try:
+    login_host = exec_cmd('last -n 2 -w -F $USER')
     regex = (r'([^\s]+)\s+' # Username
               '([^\s]+)\s+' # Virtual terminal
               '([^\s]*)\s+' # Hostname (blank if local terminal)
               '(%s)[-\s]+(%s)?.*' % (REGEX_CTIME,REGEX_CTIME)) # Date start-end
-
     user,port,host,start,end = re.search(regex,login_host[1]).groups()
-    assert bool(user == getpass.getuser())
     if host in ['',':0',':0.0']: host = 'localhost'
     start = re.sub('\s+',' ',start)
+    assert bool(user == getpass.getuser())
 
-    if opts.color:
-        if opts.warn:
-            # Get the previous login sources in address form
-            login_addr = exec_cmd('last -n 2 -w -F -i $USER')
-            login_now,login_pre = login_addr[:2]
-            results_now = re.search(regex,login_now).groups()
-            results_pre = re.search(regex,login_pre).groups()
-            assert bool(results_now[0] == results_pre[0] == getpass.getuser())
-            addr_now,start_now,end_now = results_now[2:]
-            addr_pre,start_pre,end_pre = results_pre[2:]
+    addr_now,addr_pre,reboot_time,start_time = (None,None,0,0)
+    if opts.warn:
+        # Get the previous login sources in address form
+        login_addr = exec_cmd('last -n 2 -w -F -i $USER')
+        login_now,login_pre = login_addr[:2]
+        results_now = re.search(regex,login_now).groups()
+        results_pre = re.search(regex,login_pre).groups()
+        addr_now,start_now,end_now = results_now[2:]
+        addr_pre,start_pre,end_pre = results_pre[2:]
+        assert bool(results_now[0] == results_pre[0] == getpass.getuser())
 
-            # Get the last reboot time and login time
-            datetime,timedelta = datetime.datetime,datetime.timedelta
-            uptime = ''.join(exec_cmd('cat /proc/uptime')).strip()
-            total_time, idle_time = [int(float(x)) for x in uptime.split()]
-            reboot_time = datetime.now() - timedelta(seconds = total_time)
-            start_time = datetime.strptime(start_pre, "%a %b %d %H:%M:%S %Y")
+        # Get the last reboot time and login time
+        datetime,timedelta = datetime.datetime,datetime.timedelta
+        uptime = ' '.join(read_file('/proc/uptime'))
+        total_time,idle_time = [int(float(x)) for x in uptime.split()]
+        reboot_time = datetime.now() - timedelta(seconds = total_time)
+        start_time = datetime.strptime(start_pre, "%a %b %d %H:%M:%S %Y")
 
-        # Hostname color (warn if login from different host)
-        color = TEXT_PRIMARY
-        if opts.warn and (addr_now != addr_pre):
-            color = WARNING
-        host = color+host+RESET
+    # Hostname color (warn if login from different host)
+    warn_check = bool(addr_now != addr_pre)
+    color_host = WARNING if (opts.warn and warn_check) else TEXT_PRIMARY
 
-        # Last login date color (warn if first login since reboot)
-        color = TEXT_PRIMARY
-        if opts.warn and (reboot_time > start_time):
-            color = WARNING
-        start = color+start+RESET
-    info_list.append(('Last login', '%s from %s' % (start,host)))
+    # Last login date color (warn if first login since reboot)
+    warn_check = bool(reboot_time > start_time)
+    color_start = WARNING if (opts.warn and warn_check) else TEXT_PRIMARY
+
+    values = colorize(start,color_start),colorize(host,color_host)
+    info_list.append(('Last login', '%s from %s' % values))
 except:
     login = exec_cmd('lastlog -u $USER')
     info_list.append(('Last login', ' '.join(login[-1].split())))
 
 # Get uptime
-uptime = ''.join(exec_cmd('cat /proc/uptime')).strip()
 try:
+    uptime = ' '.join(read_file('/proc/uptime'))
     total_time,idle_time = [int(float(x)) for x in uptime.split()]
     days = total_time/60/60/24
     hours = total_time/60/60%24
@@ -308,67 +353,42 @@ try:
             skip = False
         elif skip:
             continue
-        text = str(value)
-        if opts.color:
-            text = NUM_PRIMARY+text+RESET
-        text += ' '+unit
-        message_list.append(text)
-
+        message = '%s %s' % (colorize(str(value),NUM_PRIMARY),unit)
+        message_list.append(message)
     if message_list:
         info_list.append(('Uptime', ', '.join(message_list)))
 except:
-    info_list.append(('Uptime', uptime))
+    pass
 
 # Get CPU information
-uname = ''.join(exec_cmd('/bin/uname -m')).strip()
-cpu_info = exec_cmd('cat /proc/cpuinfo')
 try:
-    # Get bit width
-    if '_64' in uname:
-        bits = '64-bit'
-    elif uname:
-        bits = '32-bit'
-    else:
-        bits = ""
+    cpu_info = read_file('/proc/cpuinfo')
+    regex_list = [r'^processor\s*:\s*(.*?)\s*$',
+                  r'^model name\s*:\s*(.*?)\s*$',
+                  r'^flags\s*:.*\s+(lm)\s+.*$']
+    regex_find(cpu_info, regex_list, result_list)
 
-    # Get model
-    model = ''
-    for line in cpu_info:
-        line_sub = re.sub(r'^model name\s*:','',line)
-        if line != line_sub:
-            model = re.sub(r'\([rR]\)|\([tT][mM]\)','',line_sub)
-            model = ' '.join(model.strip().split())
-            break
-
-    # Get cores
-    cores = 0
-    for line in cpu_info:
-        if re.match(r'^processor\s*:',line):
-            cores += 1
-    cores = "%sx cores" % cores
-
-    if model or cores:
-        if opts.color:
-            model = TEXT_PRIMARY+model+RESET
-        message = '%s %s' % (bits,model) if bits else bits
-        message = '%s, %s' % (message,cores) if cores else message
-        info_list.append(('CPU information', message))
+    # Get bus bit-width, model name, and number of cores
+    cores = len(result_list[0])
+    model = result_list[1][0][0]
+    model = re.sub(r'\([rR]\)|\([tT][mM]\)','',model)
+    model = colorize(' '.join(model.split()),TEXT_PRIMARY)
+    bus_width = '64-bit' if result_list[2] else '32-bit'
+    message = '%s %s, %sx cores' % (bus_width,model,cores)
+    info_list.append(('CPU information', message))
 except:
     pass
 
 # Get CPU load
-cpu_load = ''.join(exec_cmd('cat /proc/loadavg')).strip()
 try:
+    cpu_load = ' '.join(read_file('/proc/loadavg')).strip()
     loads = [float(x) for x in cpu_load.split(None,3)[:3]]
     loads_text = []
     for load in loads:
         percent_text = '%.2f%%' % load
-        if opts.color:
-            color = NUM_PRIMARY
-            if opts.warn and (load > CPU_WARN_LEVEL):
-                color = WARNING
-            percent_text = color+percent_text+RESET
-        loads_text.append(percent_text)
+        warn_check = bool(load > CPU_WARN_LEVEL)
+        color = WARNING if (opts.warn and warn_check) else NUM_PRIMARY
+        loads_text.append(colorize(percent_text,color))
     values = tuple(loads_text)
     message = "%s (1 minute) - %s (5 minutes) - %s (15 minutes)" % values
     info_list.append(('CPU load', message))
@@ -376,33 +396,25 @@ except:
     pass
 
 # Get memory usage
-units = si_unitize if (opts.prefix_mode == 'si') else iec_unitize
-mem_usage = exec_cmd('free -b')
 try:
-    # Parse out the memory and cache lines
-    mem_line,cache_line = ('','')
-    for line in mem_usage:
-        results = re.search(r'^Mem:\s+(.*)',line)
-        if results:
-            mem_line = results.groups()[0]
-        results = re.search(r'.*buffers/cache:\s+(.*)',line)
-        if results:
-            cache_line = results.groups()[0]
+    mem_info = read_file('/proc/meminfo')
+    regex_list = [r'^MemTotal:\s+([0-9]+)\s+kB.*$',
+                  r'^MemFree:\s+([0-9]+)\s+kB.*$',
+                  r'^Buffers:\s+([0-9]+)\s+kB.*$',
+                  r'^Cached:\s+([0-9]+)\s+kB.*$']
+    regex_find(mem_info, regex_list, result_list)
 
-    # Determine what disk cache is considered
-    total,used,free,others = mem_line.split(None,3)
+    # Get total, free, cached, and buffered memory
+    total = int(result_list[0][0][0])*1024
+    free = int(result_list[1][0][0])*1024
     if CACHE_FREE:
-        used,free = cache_line.split(None,1)
-    total,used,free = int(total),int(used),int(free)
-
-    # Format output text
+        free += (int(result_list[2][0][0])+int(result_list[3][0][0]))*1024
+    used = total - free
     percent = (float(used)/float(total))*100.0
-    percent_text = '%.2f%%' % percent
-    if opts.color:
-        color = NUM_PRIMARY
-        if opts.warn and (percent > RAM_WARN_LEVEL):
-            color = WARNING
-        percent_text = color+percent_text+RESET
+
+    warn_check = bool(percent > RAM_WARN_LEVEL)
+    color = WARNING if (opts.warn and warn_check) else NUM_PRIMARY
+    percent_text = colorize('%.2f%%' % percent, color)
     values = percent_text,units(total,'B'),units(used,'B'),units(free,'B')
     message = "%s - %s total, %s used, %s free" % values
     info_list.append(('Memory usage', message))
@@ -410,18 +422,15 @@ except:
     pass
 
 # Get disk usage
-units = iec_unitize if (opts.prefix_mode == 'iec') else si_unitize
-disk_usage = exec_cmd('df -B 1 /')[-1].strip()
 try:
-    label,blocks,used,free,others = disk_usage.split(None,4)
+    disk_usage = exec_cmd('df -B 1 /')[-1].strip()
+    label,total,used,free,others = disk_usage.split(None,4)
     total,used,free = int(used)+int(free),int(used),int(free)
     percent = (float(used)/float(total))*100.0
-    percent_text = '%.2f%%' % percent
-    if opts.color:
-        color = NUM_PRIMARY
-        if opts.warn and (percent > DISK_WARN_LEVEL):
-            color = WARNING
-        percent_text = color+percent_text+RESET
+
+    warn_check = bool(percent > DISK_WARN_LEVEL)
+    color = WARNING if (opts.warn and warn_check) else NUM_PRIMARY
+    percent_text = colorize('%.2f%%' % percent, color)
     values = percent_text,units(total,'B'),units(used,'B'),units(free,'B')
     message = "%s - %s total, %s used, %s free" % values
     info_list.append(('Disk usage', message))
@@ -429,19 +438,22 @@ except:
     pass
 
 # Get network usage
-units = si_unitize if (opts.prefix_mode == 'si') else iec_unitize
-args = json.dumps({'device': NETSTAT_DEVICE,
-                   'length': NETSTAT_LENGTH,
-                   'weight': NETSTAT_WEIGHT})
-command = 'echo %s | netcat localhost %s' % (shell_escape(args),NETSTAT_PORT)
-net_usage = ''.join(exec_cmd(command)).strip()
 try:
+    # Query for network statistic
+    data = {'average': {'device': NETSTAT_DEVICE,
+                        'length': NETSTAT_LENGTH,
+                        'weight': NETSTAT_WEIGHT}}
+    data = shell_escape(json.dumps(data))
+    command = 'echo %s | netcat localhost %s' % (data,NETSTAT_PORT)
+    net_usage = ''.join(exec_cmd(command)).strip()
+
+    # Load the JSON data
     data = json.loads(net_usage)
     rx_avg,tx_avg = data['rx_average'],data['tx_average']
     total = rx_avg + tx_avg
-    color = NUM_PRIMARY
-    if opts.warn and (total > NET_WARN_LEVEL):
-        color = WARNING
+
+    warn_check = bool(total > NET_WARN_LEVEL)
+    color = WARNING if (opts.warn and warn_check) else NUM_PRIMARY
     total_text = units(total, 'B/s', color = color)
     values = total_text,units(rx_avg,'B/s'),units(tx_avg,'B/s')
     message = "%s - %s down, %s up" % values
@@ -450,16 +462,14 @@ except:
     pass
 
 # Get processes
-user_procs = len(exec_cmd('ps U $USER h'))
-total_procs = len(exec_cmd('ps -A h'))
 try:
-    if (total_procs or user_procs) and (total_procs >= user_procs):
-        if opts.color:
-            user_procs = NUM_PRIMARY+str(user_procs)+RESET
-            total_procs = NUM_PRIMARY+str(total_procs)+RESET
-        values = user_procs,total_procs
-        message = "User running %s processes out of %s total" % values
-        info_list.append(('Processes', message))
+    user_procs = len(exec_cmd('ps U $USER h'))
+    total_procs = len(exec_cmd('ps -A h'))
+    assert bool(total_procs or user_procs)
+    assert bool(total_procs >= user_procs)
+    values = colorize(user_procs,NUM_PRIMARY),colorize(total_procs,NUM_PRIMARY)
+    message = "User running %s processes out of %s total" % values
+    info_list.append(('Processes', message))
 except:
     pass
 
