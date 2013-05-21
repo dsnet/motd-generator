@@ -28,6 +28,7 @@ import getpass
 import optparse
 import datetime
 
+
 ################################################################################
 ############################### Global variables ###############################
 ################################################################################
@@ -76,7 +77,8 @@ REGEX_CTIME = (r'[a-zA-Z]{3} [a-zA-Z]{3} [ 0-9]{2} '   # Day name, month, day
                 '[0-9]{2}:[0-9]{2}:[0-9]{2} [0-9]{4}') # HH:MM:SS YYYY
 
 # Warning settings and thresholds
-CPU_WARN_LEVEL = 80.0 # CPU load in percents
+CPU_UTIL_WARN_LEVEL = 80.0 # CPU utilization in percents
+CPU_LOAD_WARN_LEVEL = 0.8 # CPU normalized load (multiply number of cores)
 RAM_WARN_LEVEL = 80.0 # RAM usage in percents
 DISK_WARN_LEVEL = 80.0 # Disk usage in percents
 NET_WARN_LEVEL = 1048576.0 # Network usage in B/s
@@ -84,15 +86,18 @@ NET_WARN_LEVEL = 1048576.0 # Network usage in B/s
 # Miscellaneous settings and configurations
 CACHE_FREE = True # Is disk cache considered free memory or not?
 FULL_HOSTNAME = False # Use the full FQDN hostname
-NETSTAT_PORT = 4004 # Port for the motd_netstat daemon
-NETSTAT_DEVICE = 'eth0' # The network device to monitor
-NETSTAT_LENGTH = 600 # Time length in seconds to average the bandwidth over
-NETSTAT_WEIGHT = 1.0 # Perform linear moving average weight
+STAT_PORT = 4004 # Port for the motd_netstat daemon
+NETTRAF_DEVICE = 'eth0' # The network device to monitor
+NETTRAF_INTERVAL = 600 # Time length in seconds to average the bandwidth over
+NETTRAF_WEIGHT = 1.0 # Perform linear moving average weight
+CPUUTIL_DEVICE = 'all' # Get the aggregate CPU utilization
+CPUUTIL_WEIGHT = 0.0 # Straight average for CPU utilizaiton
 
 opts,args = None,None
 utf_support = None
 rows,columns = None,None
 info_list = []
+
 
 ################################################################################
 ############################### Helper functions ###############################
@@ -103,18 +108,22 @@ def exec_cmd(cmd):
     with os.popen(cmd + ' 2> /dev/null', 'r') as cmd_call:
         return cmd_call.readlines()
 
+
 def read_file(path):
     with open(path, 'r') as proc_file:
         return proc_file.readlines()
+
 
 def shell_escape(data):
     """Escape a string for use on shells"""
     return "'" + data.replace("'", "'\\''") + "'"
 
+
 def colorize(text, color):
     """Colorize the text only if color is enabled"""
     global opts
     return color+unicode(text)+RESET if opts.color else text
+
 
 def regex_find(line_list, regex_list, result_list, clear_results = True):
     """Accept list of regexes and append captures into results list"""
@@ -132,6 +141,7 @@ def regex_find(line_list, regex_list, result_list, clear_results = True):
             if results:
                 result_list[index].append(results.groups())
     return bool([x for x in result_list if x])
+
 
 def unitize(value, units, prefix_mode, width = 4, color = NUM_SECONDARY):
     """Apply prefix and units"""
@@ -155,13 +165,16 @@ def unitize(value, units, prefix_mode, width = 4, color = NUM_SECONDARY):
         value = value/float(mult)
     raise ValueError("Unable to convert value to human readable format")
 
+
 def si_unitize(value, units = '', prefix_mode = 'si', **kwargs):
     """Apply prefix using the SI standard"""
     return unitize(value, units, prefix_mode, **kwargs)
 
+
 def iec_unitize(value, units = '', prefix_mode = 'iec', **kwargs):
     """Apply prefix using the IEC standard"""
     return unitize(value, units, prefix_mode, **kwargs)
+
 
 def display_border(type, color = TEXT_SECONDARY):
     """Display a horizontal border of some character"""
@@ -184,13 +197,16 @@ def display_border(type, color = TEXT_SECONDARY):
         border = type * columns
         print colorize(border,color)
 
+
 def display_upper_border():
     """Display the upper border"""
     display_border(UPPER_HALF_BLOCK)
 
+
 def display_lower_border():
     """Display the lower border"""
     display_border(LOWER_HALF_BLOCK)
+
 
 def display_welcome():
     """Display the welcome message"""
@@ -201,10 +217,12 @@ def display_welcome():
     values = (colorize(host_name, TEXT_PRIMARY),colorize(os_name, TEXT_PRIMARY))
     print " Welcome to %s running %s" % values
 
+
 def display_logo():
     """Display the logo"""
     global opts
     print LOGO % (LOGO_COLORS if opts.color else tuple(['']*len(LOGO_COLORS)))
+
 
 def display_info():
     """Display system statistical information"""
@@ -214,12 +232,12 @@ def display_info():
         key = (key+':').ljust(max_length+4,' ')
         print " %s%s" % (colorize(key,TEXT_SECONDARY),value)
 
+
 ################################################################################
 ################################ Options parser ################################
 ################################################################################
 
-epilog = \
-"""
+epilog = """\
 This is a custom message of the day (MOTD) designed to be as practical and
 informative as possible. The truth is, no one actually reads the MOTD. As such,
 the MOTD should contain useful, yet minimal, information about the host system
@@ -231,6 +249,7 @@ Using this feature, potential issues can be highlighted for easy identification.
 Warnings that can be highlighted:
  * The login time if this is the first login since a reboot
  * The last login hostname if it differs from the current login hostname
+ * CPU utilization if it exceeds a threshold
  * CPU load if it exceeds a threshold
  * RAM usage if it exceeds a threshold
  * Disk usage if it exceeds a threshold
@@ -283,6 +302,7 @@ if opts.prefix_mode and opts.prefix_mode not in ['si','iec']:
     print "Invalid prefix mode: %s" % opts.prefix_mode
     sys.exit(1)
 units = si_unitize if (opts.prefix_mode == 'si') else iec_unitize
+
 
 ################################################################################
 ################################# Script start #################################
@@ -379,14 +399,42 @@ try:
 except:
     pass
 
+# Get CPU utilization
+try:
+    utils = []
+    for interval in [60, 300, 900]:
+        # Query for CPU utilization
+        query = {'cpu_util': {'device': CPUUTIL_DEVICE,
+                              'interval': interval,
+                              'weight': CPUUTIL_WEIGHT}}
+        query = shell_escape(json.dumps(query))
+        command = 'echo %s | netcat localhost %s' % (query,STAT_PORT)
+        util_usage = ''.join(exec_cmd(command)).strip()
+
+        # Load the JSON data
+        data = json.loads(util_usage)
+        utils.append(data['utilization'] * 100.0)
+
+    utils_text = []
+    for util in utils:
+        percent_text = '%.2f%%' % util
+        warn_check = bool(util > CPU_UTIL_WARN_LEVEL)
+        color = WARNING if (opts.warn and warn_check) else NUM_PRIMARY
+        utils_text.append(colorize(percent_text,color))
+    values = tuple(utils_text)
+    message = "%s (1 minute) - %s (5 minutes) - %s (15 minutes)" % values
+    info_list.append(('CPU utilization', message))
+except:
+    pass
+
 # Get CPU load
 try:
     cpu_load = ' '.join(read_file('/proc/loadavg')).strip()
     loads = [float(x) for x in cpu_load.split(None,3)[:3]]
     loads_text = []
     for load in loads:
-        percent_text = '%.2f%%' % load
-        warn_check = bool(load > CPU_WARN_LEVEL)
+        percent_text = '%.2f' % load
+        warn_check = bool(load > CPU_LOAD_WARN_LEVEL*cores)
         color = WARNING if (opts.warn and warn_check) else NUM_PRIMARY
         loads_text.append(colorize(percent_text,color))
     values = tuple(loads_text)
@@ -440,11 +488,11 @@ except:
 # Get network usage
 try:
     # Query for network statistic
-    data = {'average': {'device': NETSTAT_DEVICE,
-                        'length': NETSTAT_LENGTH,
-                        'weight': NETSTAT_WEIGHT}}
-    data = shell_escape(json.dumps(data))
-    command = 'echo %s | netcat localhost %s' % (data,NETSTAT_PORT)
+    query = {'net_traf': {'device': NETTRAF_DEVICE,
+                          'interval': NETTRAF_INTERVAL,
+                          'weight': NETTRAF_WEIGHT}}
+    query = shell_escape(json.dumps(query))
+    command = 'echo %s | netcat localhost %s' % (query,STAT_PORT)
     net_usage = ''.join(exec_cmd(command)).strip()
 
     # Load the JSON data
@@ -480,5 +528,3 @@ display_welcome()
 display_logo()
 display_info()
 display_lower_border()
-
-# EOF
