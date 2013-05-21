@@ -32,6 +32,7 @@ import optparse
 import threading
 import collections
 
+
 ################################################################################
 ############################### Global variables ###############################
 ################################################################################
@@ -43,8 +44,10 @@ SAMPLE_RATE = 1    # Samples per second
 SAMPLE_SIZE = 3600 # Samples to store per channel
 
 # Regex patterns
-REGEX_NETDEV = r'\s*([^\s]+):\s*' + ((r'([0-9]+)\s+'+(r'[0-9]+\s+'*7))*2)
+REGEX_CPUUTIL = r'^(cpu[0-9]*)([\s0-9]*)$'
+REGEX_NETDEV = r'^\s*([^\s]+):\s*' + ((r'([0-9]+)\s+'+(r'[0-9]+\s+'*7))*2)
 REGEX_NETDEV = REGEX_NETDEV[:-1] + '*$'
+REGEX_STAT = r'cpu(\s+([0-9]+))'
 
 net_stat = None
 net_socket = None
@@ -52,59 +55,36 @@ sample_period = None
 sample_size = None
 terminate = False
 
+
 ################################################################################
 ################################ Helper classes ################################
 ################################################################################
 
-class NetworkStatistic(threading.Thread):
-    """Capture the number of bytes transmitted and received"""
+class Statistic(threading.Thread):
+    """Generic class to handle statistics gathering"""
 
     def __init__(self, period, size):
         """Initialize thread"""
         threading.Thread.__init__(self)
-        self.interfaces = dict()
+        self.devices = dict()
+        self.ovf_exts = dict()
         self.period = period
         self.size = size
         self.sleep_event = threading.Event()
         self.lock = threading.Lock()
         self.terminate = False
         self.last_wake = None
-        self.max_value = 0
-        self.prevals = dict()
-        self.offsets = dict()
-        self.overflow_width = 0
 
     def run(self):
         """Run thread"""
-        regex = re.compile(REGEX_NETDEV)
         self.last_wake = time.time()
         while not self.terminate:
-            # Read the proc filesystem
-            with open('/proc/net/dev','r') as net_devs:
-                for line in net_devs.xreadlines():
-                    results = regex.search(line)
-                    if not results:
-                        continue
-                    values = results.groups()
-                    device,rx_bytes,tx_bytes = self._fix_overflow(*values)
-
-                    # Push results onto circular queue
-                    self.lock.acquire()
-                    try:
-                        if self.interfaces.has_key(device):
-                            values = self.interfaces[device]
-                            line_buffer,rx_buffer,tx_buffer = values
-                        else:
-                            line_buffer = collections.deque(maxlen = self.size)
-                            rx_buffer = collections.deque(maxlen = self.size)
-                            tx_buffer = collections.deque(maxlen = self.size)
-                            values = line_buffer,rx_buffer,tx_buffer
-                            self.interfaces[device] = values
-                        line_buffer.appendleft(line)
-                        rx_buffer.appendleft(rx_bytes)
-                        tx_buffer.appendleft(tx_bytes)
-                    finally:
-                        self.lock.release()
+            # Obtain values from updator and append them to the buffer
+            for device, values in self.update():
+                device, values = self.fix_overflow(device, values)
+                with self.lock:
+                    buffer = self.get_device(device)
+                    buffer.appendleft(values)
 
             # Adjust sleep time for jitter
             sleep_time = self.period + self.last_wake - time.time()
@@ -119,30 +99,111 @@ class NetworkStatistic(threading.Thread):
         self.terminate = True
         self.sleep_event.set()
 
-    def _fix_overflow(self, device, rx_now, tx_now):
-        """Check if an integer overflow condition has happened"""
-        rx_now,tx_now = int(rx_now),int(tx_now)
-        self._update_bitwidth(rx_now,tx_now)
-        rx_pre,tx_pre = self.prevals.get(device,(0,0))
-        self.prevals[device] = rx_now,tx_now
-        self.offsets.setdefault(device,{'rx':0,'tx':0})
+    def get_device(self, device):
+        """Get the buffer for a device"""
+        if self.devices.has_key(device):
+            return self.devices[device]
+        else:
+            buffer = collections.deque(maxlen = self.size)
+            self.devices[device] = buffer
+            return buffer
 
-        # Transferred bytes will only decrease in event of overflow
-        if rx_pre > rx_now: self.offsets[device]['rx'] += 1
-        if tx_pre > tx_now: self.offsets[device]['tx'] += 1
-        rx_now += self.offsets[device]['rx'] * (2**self.overflow_width)
-        tx_now += self.offsets[device]['tx'] * (2**self.overflow_width)
-        return device, rx_now, tx_now
+    def fix_overflow(self, device, values):
+        """Fix numeric overflow"""
+        self.ovf_exts.setdefault(device, dict())
+        for index in xrange(len(values)):
+            now_val = values[index]
+            if isinstance(now_val, (int, long)):
+                self.ovf_exts[device].setdefault(index, (0,0,0))
+                offset, pre_val, bit_width = self.ovf_exts[device][index]
+                try: # Python 2.7 and above
+                    bit_width = max(bit_width, now_val.bit_length())
+                except: # Below Python 2.7
+                    bit_width = max(bit_width, len(bin(now_val))-2)
+                if pre_val > now_val:
+                    offset += 1
+                values[index] += offset * (2**bit_width)
+                self.ovf_exts[device][index] = (offset, now_val, bit_width)
+        return device, values
 
-    def _update_bitwidth(self, *args):
-        """Update the bitwidth of the variable that overflows"""
-        max_value = max(self.max_value,*args)
-        if max_value != self.max_value:
-            self.max_value = max_value
-            try: # Above Python 2.7
-                self.overflow_width = self.max_value.bit_length()
-            except: # Below Python 2.7
-                self.overflow_width = int(math.log(self.max_value,2))+1
+    def average(self, device, interval, weight = 0.0):
+        """Compute the moving average"""
+        length = int(round(float(interval)/self.period))
+        with self.lock:
+            value_arrays = self.compute(device, length)
+        averages = []
+        for array in value_arrays:
+            average = 0
+            size = len(array)
+            offset = float(1-weight)
+            slope = float(2*(weight/(size+1)))
+            for index,value in enumerate(array):
+                kval = slope*(size-index) + offset
+                average += value*kval
+            averages.append(average/float(size))
+        return averages
+
+
+class NetworkStatistic(Statistic):
+    """Capture the number of bytes transmitted and received"""
+
+    def update(self):
+        """Read the proc filesystem and give updates"""
+        with open('/proc/net/dev','r') as net_devs:
+            for line in net_devs.xreadlines():
+                results = re.search(REGEX_NETDEV, line)
+                if not results:
+                    continue
+                device, rx_bytes, tx_bytes = results.groups()
+                yield device, [line, int(rx_bytes), int(tx_bytes)]
+
+    def compute(self, device, length):
+        """Compute the network bandwidth"""
+        buffer = self.get_device(device)
+        size = min(len(buffer),length+1) # Account for extra sample for delta
+
+        # Compute "instantaneous" bandwidth for all deltas
+        rx_results, tx_results = [],[]
+        for index in xrange(size):
+            rx_now,tx_now = buffer[index][1],buffer[index][2]
+            if index > 0:
+                rx_traf = (rx_pre-rx_now)/float(self.period)
+                tx_traf = (tx_pre-tx_now)/float(self.period)
+                rx_results.append(rx_traf)
+                tx_results.append(tx_traf)
+            rx_pre,tx_pre = rx_now,tx_now
+        return rx_results, tx_results
+
+
+class ProcessorStatistic(Statistic):
+    """Capture how each CPU spends cycles"""
+
+    def update(self):
+        """Read the proc filesystem and give updates"""
+        with open('/proc/stat','r') as cpu_stats:
+            for line in cpu_stats.xreadlines():
+                results = re.search(REGEX_CPUUTIL, line)
+                if not results:
+                    continue
+                device,values = results.groups()
+                values = [line] + [int(x) for x in values.split()]
+                yield device, values
+
+    def compute(self, device, length):
+        """Compute the utilization"""
+        buffer = self.get_device(device)
+        size = min(len(buffer),length+1) # Account for extra sample for delta
+
+        # Compute "instantaneous" utilization for all deltas
+        results = []
+        for index in xrange(size):
+            now_total,now_idle = sum(buffer[index][1:]), buffer[index][4]
+            if index > 0:
+                idle = float(now_idle-pre_idle)/float(now_total-pre_total)
+                results.append(1.0 - idle)
+            pre_total,pre_idle = now_total,now_idle
+        return results,
+
 
 ################################################################################
 ############################### Helper functions ###############################
@@ -152,6 +213,7 @@ def interrupt_handler(sig_num, frame):
     """Handle system signal interrupts"""
     global terminate
     terminate = True
+
 
 def network_handler():
     """Handle all new network requests"""
@@ -183,92 +245,57 @@ def network_handler():
         if ex.errno == 4: return
         raise ex
 
+
 def process_request(data):
     """Process a client's request"""
-    global sample_period
+    global cpu_stat, net_stat
 
     # Try and parse the arguments
     try:
         data = json.loads(data)
-        assert len(data) <= 1
-        debug = data.pop('debug',None)
-        average = data.pop('average',{}) # Default action
-        assert len(data) == 0
+        assert isinstance(data, dict)
     except:
         return json.dumps({'error':"unable to parse arguments"})
 
     try:
-        # Command is debug
-        if isinstance(debug,basestring):
-            net_stat.lock.acquire()
-            try:
-                line_buffer,rx_buffer,tx_buffer = net_stat.interfaces[debug]
-                lines = [x for x in line_buffer]
-                rx_samples = [x for x in rx_buffer]
-                tx_samples = [x for x in tx_buffer]
-                data = {'lines': lines,
-                        'rx_samples': rx_samples,
-                        'tx_samples': tx_samples}
-            finally:
-                net_stat.lock.release()
-            return json.dumps(data)
+        # Comamnd is debug
+        if data.has_key('debug'):
+            debug = data['debug']
+            if debug in ['cpu_util', 'net_traf']:
+                stat = cpu_stat if debug == 'cpu_util' else net_stat
+                with stat.lock:
+                    data = dict()
+                    for device,buffer in stat.devices.items():
+                        data[device] = list(buffer)
+                    return json.dumps(data)
+            else:
+                raise Exception("Unknown debug target: %s" % debug)
 
-        # Command is average
-        if isinstance(average,dict):
-            device = average.get('device','eth0') # The network device
-            length = average.get('length',10) # Time length in seconds
-            weight = average.get('weight',False) # Average weight constant
+        # Command is for network traffic
+        if data.has_key('net_traf'):
+            kwargs = data['net_traf']
+            device = kwargs.get('device','eth0') # The network device
+            interval = kwargs.get('interval',10) # Time length in seconds
+            weight = kwargs.get('weight',0.0)    # Average weight constant
 
-            # Check the time length
-            size = int(round(float(length)/sample_period))
-            assert size > 0
-
-            # Check the average weight constant
-            weight = float(weight)
-            assert 1 >= weight >= 0
-
-            rx_avg,tx_avg = compute_average(device, size, weight)
+            rx_avg,tx_avg = net_stat.average(device, interval, weight = weight)
             return json.dumps({'rx_average':rx_avg,'tx_average':tx_avg})
+
+        # Command is for CPU utilization
+        if data.has_key('cpu_util'):
+            kwargs = data['cpu_util']
+            device = kwargs.get('device','all')  # The network device
+            interval = kwargs.get('interval',10) # Time length in seconds
+            weight = kwargs.get('weight',0.0)    # Average weight constant
+            if device == 'all':
+                device = 'cpu'
+
+            utilization, = cpu_stat.average(device, interval, weight = weight)
+            return json.dumps({'utilization':utilization})
+
     except Exception, ex:
         return json.dumps({'error':str(ex)})
 
-def compute_average(device, size, weight = 0.0):
-    """Compute the average bandwidth for a given device"""
-    global net_stat
-
-    rx_avg,tx_avg = (0,0)
-    net_stat.lock.acquire()
-    try:
-        if net_stat.interfaces.has_key(device):
-            line_buffer,rx_buffer,tx_buffer = net_stat.interfaces[device]
-            request_size = size+1 # Account for extra sample to compute delta
-            size = min(len(rx_buffer),len(tx_buffer),request_size)
-
-            # Compute the average throughput
-            offset = float(1-weight)
-            slope = float(2*(weight/size))
-            rx_pre,tx_pre = rx_buffer[0],tx_buffer[0]
-            for index in xrange(1,size):
-                rx_now,tx_now = rx_buffer[index],tx_buffer[index]
-
-                # Compute "instantaneous" bandwidth
-                rx_traf = (rx_pre-rx_now)/float(net_stat.period)
-                tx_traf = (tx_pre-tx_now)/float(net_stat.period)
-
-                # Add weighted value to running sum
-                kval = slope*(size-index) + offset
-                rx_avg += rx_traf*kval
-                tx_avg += tx_traf*kval
-
-                rx_pre,tx_pre = rx_now,tx_now
-            rx_avg = rx_avg/float(size-1)
-            tx_avg = tx_avg/float(size-1)
-        else:
-            raise Exception("interface device '%s' does not exist" % device)
-    finally:
-        net_stat.lock.release()
-
-    return rx_avg,tx_avg
 
 ################################################################################
 ################################ Options parser ################################
@@ -307,6 +334,7 @@ if opts.sample_rate <= 0:
 sample_period = 1.0/opts.sample_rate
 sample_size = opts.sample_size
 
+
 ################################################################################
 ################################# Script start #################################
 ################################################################################
@@ -322,7 +350,9 @@ net_socket.listen(5)
 net_socket.settimeout(1)
 
 # Start the network data gatherer
+cpu_stat = ProcessorStatistic(sample_period,sample_size)
 net_stat = NetworkStatistic(sample_period,sample_size)
+cpu_stat.start()
 net_stat.start()
 
 # The main event loop
@@ -330,7 +360,6 @@ try:
     while not terminate:
         network_handler()
 finally:
+    cpu_stat.stop()
     net_stat.stop()
     net_socket.close()
-
-# EOF
