@@ -24,6 +24,7 @@ import re
 import os
 import sys
 import json
+import math
 import time
 import socket
 import signal
@@ -68,6 +69,10 @@ class NetworkStatistic(threading.Thread):
         self.lock = threading.Lock()
         self.terminate = False
         self.last_wake = None
+        self.max_value = 0
+        self.prevals = dict()
+        self.offsets = dict()
+        self.overflow_width = 0
 
     def run(self):
         """Run thread"""
@@ -80,8 +85,8 @@ class NetworkStatistic(threading.Thread):
                     results = regex.search(line)
                     if not results:
                         continue
-                    device,rx_bytes,tx_bytes = results.groups()
-                    rx_bytes,tx_bytes = int(rx_bytes),int(tx_bytes)
+                    values = results.groups()
+                    device,rx_bytes,tx_bytes = self._fix_overflow(*values)
 
                     # Push results onto circular queue
                     self.lock.acquire()
@@ -113,6 +118,31 @@ class NetworkStatistic(threading.Thread):
         """Stop thread"""
         self.terminate = True
         self.sleep_event.set()
+
+    def _fix_overflow(self, device, rx_now, tx_now):
+        """Check if an integer overflow condition has happened"""
+        rx_now,tx_now = int(rx_now),int(tx_now)
+        self._update_bitwidth(rx_now,tx_now)
+        rx_pre,tx_pre = self.prevals.get(device,(0,0))
+        self.prevals[device] = rx_now,tx_now
+        self.offsets.setdefault(device,{'rx':0,'tx':0})
+
+        # Transferred bytes will only decrease in event of overflow
+        if rx_pre > rx_now: self.offsets[device]['rx'] += 1
+        if tx_pre > tx_now: self.offsets[device]['tx'] += 1
+        rx_now += self.offsets[device]['rx'] * (2**self.overflow_width)
+        tx_now += self.offsets[device]['tx'] * (2**self.overflow_width)
+        return device, rx_now, tx_now
+
+    def _update_bitwidth(self, *args):
+        """Update the bitwidth of the variable that overflows"""
+        max_value = max(self.max_value,*args)
+        if max_value != self.max_value:
+            self.max_value = max_value
+            try: # Above Python 2.7
+                self.overflow_width = self.max_value.bit_length()
+            except: # Below Python 2.7
+                self.overflow_width = int(math.log(self.max_value,2))+1
 
 ################################################################################
 ############################### Helper functions ###############################
