@@ -2,9 +2,26 @@
 
 ## Introduction ##
 
-Feel free to modify the scripts as you see fit!
-
 ![motd](http://code.digital-static.net/motd-generator/raw/tip/doc/motd.png)
+
+This is a custom message of the day (MOTD) designed to be as practical and
+informative as possible. The truth is, no one actually reads the MOTD. As such,
+the MOTD should contain useful, yet minimal, information about the host system
+such that a quick glance at it when logging in may actually be worth a person's
+precious time. This way, any potential issues are noticed and not naively
+ignored. This MOTD generator scripts has the ability to output text in color.
+Using this feature, potential issues can be highlighted for easy identification.
+
+Warnings that can be highlighted:
+* The login time if this is the first login since a reboot
+* The last login hostname if it differs from the current login hostname
+* CPU utilization if it exceeds a threshold
+* CPU load if it exceeds a threshold
+* RAM usage if it exceeds a threshold
+* Disk usage if it exceeds a threshold
+* Network load if it exceeds a threshold
+
+Feel free to modify the scripts as you see fit!
 
 ## Files ##
 
