@@ -173,14 +173,14 @@ def unitize(value, units, prefix_mode, width = 4, color = NUM_SECONDARY):
     raise ValueError("Unable to convert value to human readable format")
 
 
-def si_unitize(value, units = '', prefix_mode = 'si', **kwargs):
+def si_unitize(value, units = '', **kwargs):
     """Apply prefix using the SI standard"""
-    return unitize(value, units, prefix_mode, **kwargs)
+    return unitize(value, units, 'si', **kwargs)
 
 
-def iec_unitize(value, units = '', prefix_mode = 'iec', **kwargs):
+def iec_unitize(value, units = '', **kwargs):
     """Apply prefix using the IEC standard"""
-    return unitize(value, units, prefix_mode, **kwargs)
+    return unitize(value, units, 'iec', **kwargs)
 
 
 def display_border(type, color = TEXT_SECONDARY):
