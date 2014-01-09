@@ -160,18 +160,18 @@ class NetworkStatistic(Statistic):
     def compute(self, device, length):
         """Compute the network bandwidth"""
         buffer = self.get_device(device)
-        size = min(len(buffer),length+1) # Account for extra sample for delta
+        size = min(len(buffer), length+1) # Account for extra sample for delta
 
         # Compute "instantaneous" bandwidth for all deltas
-        rx_results, tx_results = [],[]
+        rx_results, tx_results = [], []
         for index in xrange(size):
-            rx_now,tx_now = buffer[index][1],buffer[index][2]
+            rx_now, tx_now = buffer[index][1], buffer[index][2]
             if index > 0:
                 rx_traf = (rx_pre-rx_now)/float(self.period)
                 tx_traf = (tx_pre-tx_now)/float(self.period)
                 rx_results.append(rx_traf)
                 tx_results.append(tx_traf)
-            rx_pre,tx_pre = rx_now,tx_now
+            rx_pre, tx_pre = rx_now, tx_now
         return rx_results, tx_results
 
 
@@ -185,23 +185,23 @@ class ProcessorStatistic(Statistic):
                 results = re.search(REGEX_CPUUTIL, line)
                 if not results:
                     continue
-                device,values = results.groups()
+                device, values = results.groups()
                 values = [line] + [int(x) for x in values.split()]
                 yield device, values
 
     def compute(self, device, length):
         """Compute the utilization"""
         buffer = self.get_device(device)
-        size = min(len(buffer),length+1) # Account for extra sample for delta
+        size = min(len(buffer), length+1) # Account for extra sample for delta
 
         # Compute "instantaneous" utilization for all deltas
         results = []
         for index in xrange(size):
-            now_total,now_idle = sum(buffer[index][1:]), buffer[index][4]
+            now_total, now_idle = sum(buffer[index][1:]), buffer[index][4]
             if index > 0:
-                idle = float(now_idle-pre_idle)/float(now_total-pre_total)
+                idle = float(now_idle-pre_idle) / float(now_total-pre_total)
                 results.append(1.0 - idle)
-            pre_total,pre_idle = now_total,now_idle
+            pre_total, pre_idle = now_total, now_idle
         return results,
 
 
@@ -255,7 +255,7 @@ def process_request(data):
         data = json.loads(data)
         assert isinstance(data, dict)
     except:
-        return json.dumps({'error':"unable to parse arguments"})
+        return json.dumps({'error': "unable to parse arguments"})
 
     try:
         # Comamnd is debug
@@ -265,7 +265,7 @@ def process_request(data):
                 stat = cpu_stat if debug == 'cpu_util' else net_stat
                 with stat.lock:
                     data = dict()
-                    for device,buffer in stat.devices.items():
+                    for device, buffer in stat.devices.items():
                         data[device] = list(buffer)
                     return json.dumps(data)
             else:
@@ -274,27 +274,27 @@ def process_request(data):
         # Command is for network traffic
         if data.has_key('net_traf'):
             kwargs = data['net_traf']
-            device = kwargs.get('device','eth0') # The network device
-            interval = kwargs.get('interval',10) # Time length in seconds
-            weight = kwargs.get('weight',0.0)    # Average weight constant
+            device = kwargs.get('device', 'eth0') # The network device
+            interval = kwargs.get('interval', 10) # Time length in seconds
+            weight = kwargs.get('weight', 0.0)    # Average weight constant
 
-            rx_avg,tx_avg = net_stat.average(device, interval, weight = weight)
-            return json.dumps({'rx_average':rx_avg,'tx_average':tx_avg})
+            rx_avg, tx_avg = net_stat.average(device, interval, weight = weight)
+            return json.dumps({'rx_average': rx_avg, 'tx_average': tx_avg})
 
         # Command is for CPU utilization
         if data.has_key('cpu_util'):
             kwargs = data['cpu_util']
-            device = kwargs.get('device','all')  # The network device
-            interval = kwargs.get('interval',10) # Time length in seconds
-            weight = kwargs.get('weight',0.0)    # Average weight constant
+            device = kwargs.get('device', 'all')  # The network device
+            interval = kwargs.get('interval', 10) # Time length in seconds
+            weight = kwargs.get('weight', 0.0)    # Average weight constant
             if device == 'all':
                 device = 'cpu'
 
             utilization, = cpu_stat.average(device, interval, weight = weight)
-            return json.dumps({'utilization':utilization})
+            return json.dumps({'utilization': utilization})
 
     except Exception, ex:
-        return json.dumps({'error':str(ex)})
+        return json.dumps({'error': str(ex)})
 
 
 ################################################################################
@@ -303,24 +303,22 @@ def process_request(data):
 
 # Create a config parser
 opts_parser = optparse.OptionParser(add_help_option = False)
-opts_parser.add_option('-h', '--help',
-                       action = 'help',
-                       help = "Display this help and exit.")
-opts_parser.add_option('-r', '--sample_rate',
-                       default = SAMPLE_RATE,
-                       type = 'float',
-                       help = "The rate to log network statistics. "
-                              "Represented in samples per second [%default]")
-opts_parser.add_option('-s', '--sample_size',
-                       default = SAMPLE_SIZE,
-                       type = 'int',
-                       help = "The amount of samples to store before rolling. "
-                              "[%default]")
-opts_parser.add_option('-p', '--port',
-                       default = PORT,
-                       type = 'int',
-                       help = "The port to report statistics on. "
-                              "[%default]")
+opts_parser.add_option(
+    '-h', '--help', action = 'help',
+    help = "Display this help and exit.",
+)
+opts_parser.add_option(
+    '-r', '--sample_rate', default = SAMPLE_RATE, type = 'float',
+    help = "Rate to log network statistics in samples per second [%default].",
+)
+opts_parser.add_option(
+    '-s', '--sample_size', default = SAMPLE_SIZE, type = 'int',
+    help = "The amount of samples to store before rolling [%default].",
+)
+opts_parser.add_option(
+    '-p', '--port', default = PORT, type = 'int',
+    help = "The port to report statistics on [%default].",
+)
 (opts, args) = opts_parser.parse_args()
 
 if opts.sample_size <= 0:
@@ -331,7 +329,7 @@ if opts.sample_rate <= 0:
     print "Sample rate must be a positive value"
     sys.exit(1)
 
-sample_period = 1.0/opts.sample_rate
+sample_period = 1.0 / opts.sample_rate
 sample_size = opts.sample_size
 
 
