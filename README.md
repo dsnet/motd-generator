@@ -13,6 +13,7 @@ ignored. This MOTD generator scripts has the ability to output text in color.
 Using this feature, potential issues can be highlighted for easy identification.
 
 Warnings that can be highlighted:
+
 * The login time if this is the first login since a reboot
 * The last login hostname if it differs from the current login hostname
 * CPU utilization if it exceeds a threshold
