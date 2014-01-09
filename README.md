@@ -1,4 +1,4 @@
-# MOTD Generator #
+# Message-of-the-Day Generator #
 
 ## Introduction ##
 
