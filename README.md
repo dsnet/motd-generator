@@ -4,6 +4,8 @@
 
 Feel free to modify the scripts as you see fit!
 
+![motd](http://code.digital-static.net/motd-generator/raw/tip/doc/motd.png)
+
 ## Files ##
 
 * **motd_gen.py**: Script to generate informative MOTD display
