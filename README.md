@@ -53,7 +53,7 @@ service motd_stat start
 rm /etc/motd
 touch /etc/motd
 
-# Prevent other modules from print redundant information
+# Prevent other modules from printing redundant information
 sed -i -e 's|\(PrintLastLog\s*\)yes|\1no|' /etc/ssh/sshd_config
 sed -i -e 's|\(PrintMotd\s*\)yes|\1no|' /etc/ssh/sshd_config
 sed -i -e 's|\(^\s*session.*pam_mail.so\)|#\1|' /etc/pam.d/*
