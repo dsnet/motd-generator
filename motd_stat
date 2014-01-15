@@ -13,7 +13,7 @@
 NAME=motd_stat
 DESC=motd_stat
 PID_FILE=/var/run/$NAME.pid
-DAEMON_HOME=/etc
+DAEMON_HOME=/usr/local/motd_gen
 DAEMON=$DAEMON_HOME/motd_stat.py
 DAEMON_OPTS=""
 
