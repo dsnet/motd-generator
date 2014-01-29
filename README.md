@@ -24,11 +24,13 @@ Warnings that can be highlighted:
 
 Feel free to modify the scripts as you see fit!
 
+
 ## Files ##
 
 * **motd_gen.py**: Script to generate informative MOTD display
 * **motd_stat.py**: Statistic gathering daemon for MOTD
 * **motd_stat**: Init.d script to start the motd_stat daemon
+
 
 ## Installation ##
 
