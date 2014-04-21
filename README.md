@@ -65,11 +65,11 @@ sed -i -e 's|\(^\s*session.*pam_lastlog.so\)|#\1|' /etc/pam.d/*
 
 # Print the custom MOTD upon every login
 echo -e "
-if [ -e $MOTD_HOME/motd_gen.py ]; then
+if [ -e $SRC_ROOT/motd_gen.py ]; then
 \tif [ -x /usr/bin/dircolors ]; then
-\t\t$MOTD_HOME/motd_gen.py --color --warn --border
+\t\t$SRC_ROOT/motd_gen.py --color --warn --border
 \telse
-\t\t$MOTD_HOME/motd_gen.py --border
+\t\t$SRC_ROOT/motd_gen.py --border
 \tfi
 fi" >> /etc/profile
 ```
