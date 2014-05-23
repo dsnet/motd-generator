@@ -47,9 +47,9 @@ SRC_ROOT=/usr/local/motd_gen
 mv *-motd-generator-* $SRC_ROOT
 
 # Setup the daemon service
-ln -s $SRC_ROOT/motd_stat /etc/init.d/
-update-rc.d motd_stat defaults
-service motd_stat start
+ln -s $SRC_ROOT/motd_stat /etc/init.d/motd-stat
+update-rc.d motd-stat defaults
+service motd-stat start
 
 # Nuke old MOTD file
 rm /etc/motd
