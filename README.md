@@ -2,7 +2,7 @@
 
 ## Introduction ##
 
-![motd](http://code.digital-static.net/motd-generator/raw/tip/doc/motd.png)
+![motd](http://bitbucket.org/rawr/motd-generator/raw/tip/doc/motd.png)
 
 This is a custom message of the day (MOTD) designed to be as practical and
 informative as possible. The truth is, no one actually reads the MOTD. As such,
@@ -40,7 +40,7 @@ su
 
 # Download the archive
 SRC_VERSION=tip
-curl http://code.digital-static.net/motd-generator/get/$SRC_VERSION.tar.gz | tar -zxv
+curl http://bitbucket.org/rawr/motd-generator/get/$SRC_VERSION.tar.gz | tar -zxv
 
 # Move local copy
 SRC_ROOT=/usr/local/motd_gen
