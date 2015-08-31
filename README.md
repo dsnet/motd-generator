@@ -2,7 +2,7 @@
 
 ## Introduction ##
 
-![motd](http://bitbucket.org/rawr/motd-generator/raw/tip/doc/motd.png)
+![motd](doc/motd.png)
 
 This is a custom message of the day (MOTD) designed to be as practical and
 informative as possible. The truth is, no one actually reads the MOTD. As such,
@@ -39,12 +39,11 @@ Feel free to modify the scripts as you see fit!
 su
 
 # Download the archive
-SRC_VERSION=tip
-curl http://bitbucket.org/rawr/motd-generator/get/$SRC_VERSION.tar.gz | tar -zxv
+curl -L https://github.com/dsnet/motd-generator/archive/master.tar.gz | tar -zxv
 
 # Move local copy
 SRC_ROOT=/usr/local/motd_gen
-mv *-motd-generator-* $SRC_ROOT
+mv motd-generator-master $SRC_ROOT
 
 # Setup the daemon service
 ln -s $SRC_ROOT/motd_stat /etc/init.d/motd-stat
